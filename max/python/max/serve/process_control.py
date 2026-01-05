@@ -98,8 +98,16 @@ class AsyncProcess(multiprocessing.context.SpawnProcess):
     async def term_then_kill(self, wait: float = 5) -> None:
         """try to terminate then kill if disobeys"""
         self.terminate()
-        await asyncio.sleep(wait)
-        self.kill()
+        try:
+            deadline = asyncio.get_event_loop().time() + wait
+            while asyncio.get_event_loop().time() < deadline:
+                if self.exitcode is not None:
+                    return
+                await asyncio.sleep(0.1)
+        finally:
+            if self.exitcode is None:
+                self.kill()
+                self.join(timeout=1.0)
 
     async def join_async(self) -> int | None:
         # the "sentinel" fd is read end of a pipe shared with subprocess
@@ -159,11 +167,13 @@ async def run_subprocess(
             exitcode = await proc.join_async()
         except:
             # likely cancelled from outside.
-            # send some signals and try one more time to join()
+            # send some signals and ensure termination completes before cleanup
             kill_task = asyncio.create_task(proc.term_then_kill())
-            clean.callback(kill_task.cancel)
-
-            exitcode = await proc.join_async()
+            try:
+                await asyncio.shield(kill_task)
+            except asyncio.CancelledError:
+                await kill_task
+            exitcode = proc.exitcode
             raise
 
     if isinstance(exception, SystemExit):
