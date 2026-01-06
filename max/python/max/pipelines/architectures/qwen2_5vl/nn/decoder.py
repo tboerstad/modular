@@ -42,6 +42,8 @@ from max.nn import (
     ReturnLogits,
     RMSNorm,
     VocabParallelEmbedding,
+    distribute_value,
+    forward_sharded_layers,
 )
 from max.nn.attention.attention_with_rope import _compute_shard_range
 from max.nn.comm.allreduce import Allreduce
@@ -54,14 +56,10 @@ from max.nn.kernels import (
 )
 from max.nn.kv_cache import KVCacheParams, PagedCacheValues
 from max.nn.layer import Shardable
-from max.nn.transformer.distributed_transformer import (
-    ShardableCallable,
-    forward_sharded_layers,
-)
+from max.nn.transformer.distributed_transformer import ShardableCallable
 from max.pipelines.architectures.internvl.embedding_utils import (
     merge_multimodal_embeddings_with_gather,
 )
-from max.pipelines.architectures.internvl.internvl import distribute_value
 from max.pipelines.architectures.llama3.model_config import Llama3Config
 
 

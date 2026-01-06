@@ -28,6 +28,7 @@ from max.graph import (
 )
 from max.graph.weights import WeightData
 from max.nn.comm.ep import EPBatchManager, EPCommInitializer, EPConfig
+from max.nn import forward_sharded_layers
 from max.nn.float8_config import (
     Float8Config,
     Float8InputScaleSpec,
@@ -36,7 +37,6 @@ from max.nn.float8_config import (
     Float8WeightScaleSpec,
 )
 from max.nn.moe import MoEFp8, MoEGate
-from max.nn.transformer.distributed_transformer import forward_sharded_layers
 from test_common.graph_utils import is_b100_b200, is_h100_h200
 
 MOE_DIM = 2048

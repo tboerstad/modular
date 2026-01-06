@@ -37,6 +37,7 @@ from max.nn.kernels import (
 
 from ..clamp import clamp
 from ..comm import Allreduce
+from ..distributed_utils import distribute_value
 from ..kernels import (
     flash_attention_ragged,
     fused_qk_ragged_rope,
@@ -1035,12 +1036,6 @@ class GPTQAttentionWithRope(AttentionWithRope):
         attn_out = ops.reshape(attn_out, shape=[total_seq_len, -1])
 
         return self.o_proj(attn_out)
-
-
-def distribute_value(
-    v: TensorValue, devices: list[DeviceRef]
-) -> list[TensorValue]:
-    return [v.to(device) for device in devices]
 
 
 class TensorParallelAttentionWithRope(

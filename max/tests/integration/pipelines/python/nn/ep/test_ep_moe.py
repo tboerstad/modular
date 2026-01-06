@@ -25,9 +25,9 @@ from max.graph import (
     TensorType,
     TensorValue,
 )
+from max.nn import forward_sharded_layers
 from max.nn.comm.ep import EPBatchManager, EPCommInitializer, EPConfig
 from max.nn.moe import MoE, MoEGate
-from max.nn.transformer.distributed_transformer import forward_sharded_layers
 from test_common.graph_utils import is_b100_b200
 
 MOE_DIM = 2048

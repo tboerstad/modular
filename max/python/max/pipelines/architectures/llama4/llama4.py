@@ -34,6 +34,7 @@ from max.nn import (
     ReturnLogits,
     RMSNorm,
     VocabParallelEmbedding,
+    distribute_value,
 )
 from max.nn.kv_cache import (
     PagedCacheValues,
@@ -43,12 +44,6 @@ from max.nn.layer import LayerList
 from .layers.attention import Llama4TextAttention
 from .layers.moe import DistributedLlama4MoE, Llama4MoEGate
 from .model_config import Llama4Config
-
-
-def distribute_value(
-    v: TensorValue, devices: list[DeviceRef]
-) -> list[TensorValue]:
-    return [v.to(device) for device in devices]
 
 
 class Llama4DecoderLayer(Module):

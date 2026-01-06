@@ -35,16 +35,14 @@ from max.nn import (
     ReturnLogits,
     RMSNorm,
     VocabParallelEmbedding,
+    distribute_value,
+    forward_sharded_layers,
 )
 from max.nn.comm.allreduce import Allreduce
 from max.nn.kv_cache import PagedCacheValues
-from max.nn.transformer.distributed_transformer import (
-    forward_sharded_layers,
-)
 from max.pipelines.architectures.internvl.embedding_utils import (
     merge_multimodal_embeddings_with_gather,
 )
-from max.pipelines.architectures.internvl.internvl import distribute_value
 
 from ..model_config import Qwen3VLConfig
 from .moe import Qwen3VLMoE

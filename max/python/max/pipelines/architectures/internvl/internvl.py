@@ -45,6 +45,7 @@ from max.nn import (
     Shardable,
     TensorParallelAttentionWithRope,
     VocabParallelEmbedding,
+    distribute_value,
 )
 from max.nn.attention.mask_config import MHAMaskVariant
 from max.nn.kernels import flash_attention_gpu
@@ -69,21 +70,6 @@ class DeviceAttentionParams:
     device_heads: int
     head_start: int
     head_dim: int
-
-
-def distribute_value(
-    v: TensorValue, devices: Sequence[DeviceRef]
-) -> list[TensorValue]:
-    """Distributes a tensor value across multiple devices.
-
-    Args:
-        v: The tensor value to distribute.
-        devices: The list of devices to distribute the tensor across.
-
-    Returns:
-        A list of tensor values, one per device.
-    """
-    return [v.to(device) for device in devices]
 
 
 class InternVLDecoderLayer(Module):

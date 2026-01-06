@@ -32,6 +32,7 @@ from max.graph import (
 from max.graph.ops.allreduce import matmul_allreduce
 from max.nn.comm.allreduce import Allreduce
 
+from ..distributed_utils import distribute_value, forward_sharded_layers
 from ..embedding import VocabParallelEmbedding
 from ..kv_cache import (
     KVCacheParams,
@@ -48,40 +49,10 @@ def take(it: Iterable[Value[Any]], n: int) -> list[Value[Any]]:
     return list(islice(it, n))
 
 
-# TODO (pavan): clean up duplicate instances of distribute_value, shard_col_value,
-# shard_row_value across the codebase into a multi gpu utils file
-def distribute_value(
-    v: TensorValue, devices: list[DeviceRef]
-) -> list[TensorValue]:
-    return [v.to(device) for device in devices]
-
-
 # NOTE: This should eventually be deleted once Weight & Linear are refactored to assume
 # distributed by default.
 class ShardableCallable(Shardable, Protocol):
     def __call__(self, x: TensorValue) -> TensorValue: ...
-
-
-def forward_sharded_layers(
-    layers: Sequence[Callable[[TensorValue], TensorValue]],
-    xs: Sequence[TensorValue],
-) -> list[TensorValue]:
-    """Forward pass through sharded layers.
-
-    Args:
-        layers: Sequence of callable layers that return TensorValue
-        xs: Input tensors, one per layer
-
-    Returns:
-        List of output tensors from each layer
-
-    Raises:
-        AssertionError: If the number of layers and input tensors don't match
-    """
-    assert len(xs) == len(layers), (
-        f"Number of layers ({len(layers)}) must match number of inputs ({len(xs)})"
-    )
-    return [layer(x) for layer, x in zip(layers, xs, strict=True)]
 
 
 class DistributedTransformerBlock(Module):
