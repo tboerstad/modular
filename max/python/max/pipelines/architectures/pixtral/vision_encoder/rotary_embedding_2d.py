@@ -22,7 +22,7 @@ from max.nn import Module
 
 def meshgrid(
     height: DimLike, width: DimLike, _indexing: str = "ij"
-) -> TensorValue:
+) -> tuple[TensorValue, TensorValue]:
     """Returns row indices and col indices of each point on the grid."""
     height = Dim(height)
     width = Dim(width)
@@ -51,7 +51,7 @@ def meshgrid(
     v_grid = ops.tile(
         ops.unsqueeze(col_indices, 0), [height, 1]
     )  # Shape: (height, width)
-    return h_grid, v_grid  # type: ignore
+    return h_grid, v_grid
 
 
 def patch_position_ids(
