@@ -78,41 +78,11 @@ class Shardable(Protocol):
         ...
 
 
-class Layer:
-    """
-    .. deprecated:: 25.2.
-
-    Base class for neural network components.
-    Use :obj:`Module` instead.
-
-    Provides functionality for adding hooks to the call function of
-    each layer to support testing, debugging or profiling.
-    """
-
-    def __init_subclass__(cls):
-        if cls.__name__ == "Module":
-            # Module subclasses Layer, but we don't want to apply
-            # _call_with_hooks to it.
-            return
-        # Check `__dict__` instead of `hasattr` because `hasattr` passes on
-        # subclasses that don't implement the method.
-        if "__call__" in cls.__dict__:
-            setattr(cls, "__call__", _call_with_hooks(cls.__dict__["__call__"]))  # noqa: B010
-
-    def __call__(self, *args, **kwargs):
-        """Defines the forward function of this layer.
-
-        Subclasses must override this function. There is no exact signature that a
-        call function must follow, but inputs/outputs should generally be
-        `max.graph.TensorValue`. Non-`TensorValue` inputs are fine, but
-        cannot be updated once the graph is built.
-        """
-
-
-class Module(Layer, ABC):
+class Module(ABC):
     """Base class for model components with weight management.
 
     Provides functionality to create custom layers and construct networks with automatic weight tracking.
+    Also supports hooks for testing, debugging, or profiling layer calls.
 
     The following example uses the :obj:`Module` class to create custom layers and build a neural network:
 
@@ -148,6 +118,13 @@ class Module(Layer, ABC):
     :obj:`load_state_dict()` to initialize or set the weights values, and finalize
     the weight names to be unique within the model.
     """
+
+    def __init_subclass__(cls):
+        # Apply hooks to subclass __call__ methods for debugging/profiling.
+        # Check `__dict__` instead of `hasattr` because `hasattr` passes on
+        # subclasses that don't implement the method.
+        if "__call__" in cls.__dict__:
+            setattr(cls, "__call__", _call_with_hooks(cls.__dict__["__call__"]))  # noqa: B010
 
     def __init__(self) -> None:
         # `__init__` may be called if `__setattr__` is called before
@@ -630,18 +607,18 @@ _LAYER_HOOKS = _LOCAL._layer_hooks = []
 
 
 def add_layer_hook(
-    fn: Callable[[Layer, tuple[Any, ...], dict[str, Any], Any], Any],
+    fn: Callable[[Module, tuple[Any, ...], dict[str, Any], Any], Any],
 ) -> None:
-    """Adds a hook to call a function after each layer's ``__call__``.
+    """Adds a hook to call a function after each module's ``__call__``.
 
     The function will be passed four inputs:
-    - layer
+    - module
     - input_args
     - input_kwargs
     - outputs
 
     The function can either return `None` or new
-    outputs that will replace the layer returned outputs.
+    outputs that will replace the module returned outputs.
 
     Note that input and outputs contain graph Values, which show limited
     information (like :obj:`~max.graph.TensorValue.shape` and :obj:`~max.graph.TensorValue.dtype`). You can still see the computed values
@@ -651,8 +628,8 @@ def add_layer_hook(
 
     .. code-block:: python
 
-        def print_info(layer, args, kwargs, outputs):
-            print("Layer:", type(layer).__name__)
+        def print_info(module, args, kwargs, outputs):
+            print("Module:", type(module).__name__)
             print("Input args:", args)
             print("Input kwargs:", kwargs)
             print("Outputs:", outputs)
@@ -670,19 +647,19 @@ def clear_hooks() -> None:
 
 def _call_with_hooks(call_fn: Callable[..., Any]) -> Callable[..., Any]:
     @wraps(call_fn)
-    def __call_with_hooks(layer: Layer, *args, **kwargs) -> Any:
+    def __call_with_hooks(module: Module, *args, **kwargs) -> Any:
         # Hide this wrapper from rich traceback.
         _rich_traceback_omit = True
 
-        outputs = call_fn(layer, *args, **kwargs)
+        outputs = call_fn(module, *args, **kwargs)
         # Use the inspect lib to ensure that args and kwargs are passed
         # to the hook as defined in the function signature.
-        bound_args = signature(call_fn).bind(layer, *args, **kwargs)
+        bound_args = signature(call_fn).bind(module, *args, **kwargs)
         for hook in _LAYER_HOOKS:
             # Call the hook. Note that the first argument in `bound_args.args`
-            # is the layer, so it is skipped.
+            # is the module, so it is skipped.
             hook_outputs = hook(
-                layer, bound_args.args[1:], bound_args.kwargs, outputs
+                module, bound_args.args[1:], bound_args.kwargs, outputs
             )
             if hook_outputs is not None:
                 outputs = hook_outputs

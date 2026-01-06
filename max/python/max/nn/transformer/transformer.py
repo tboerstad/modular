@@ -19,10 +19,10 @@ from typing import TypeVar
 from max.dtype import DType
 from max.graph import DeviceRef, TensorValue, TensorValueLike, ops
 
-from ..embedding import Embedding, EmbeddingV1
+from ..embedding import Embedding
 from ..kv_cache import KVCacheParams, PagedCacheValues
-from ..layer import Layer, LayerList, Module
-from ..linear import Linear, LinearV1
+from ..layer import LayerList, Module
+from ..linear import Linear
 from ..rotary_embedding import RotaryEmbedding
 
 
@@ -32,9 +32,9 @@ class TransformerBlock(Module):
     def __init__(
         self,
         attention: Module,
-        mlp: Layer,
-        attention_norm: Layer,
-        mlp_norm: Layer,
+        mlp: Module,
+        attention_norm: Module,
+        mlp_norm: Module,
         residual_multiplier: float = 1.0,
     ) -> None:
         super().__init__()
@@ -99,9 +99,9 @@ class Transformer(Module):
         dim: int,
         n_heads: int,
         layers: list[Block],
-        norm: Layer,
-        output: LinearV1 | Linear,
-        embedding: EmbeddingV1 | Embedding,
+        norm: Module,
+        output: Linear,
+        embedding: Embedding,
         kv_params: KVCacheParams,
         rope: RotaryEmbedding,
         return_logits: ReturnLogits = ReturnLogits.LAST_TOKEN,

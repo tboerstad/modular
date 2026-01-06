@@ -22,7 +22,7 @@ from typing import Any
 
 from max.graph import TensorValue
 from max.nn._identity import IdentitySet
-from max.nn.layer import Layer, add_layer_hook, clear_hooks
+from max.nn.layer import Module, add_layer_hook, clear_hooks
 
 from .base_print_hook import BasePrintHook
 
@@ -47,10 +47,10 @@ class PrintHook(BasePrintHook):
                 " to stdout with COMPACT format."
             )
 
-    def name_layers(self, model: Layer) -> None:
-        """Create names for all layers in the model based on nested attributes."""
-        for layer, name in _walk_layers(model):
-            self.add_layer(layer, name)
+    def name_layers(self, model: Module) -> None:
+        """Create names for all modules in the model based on nested attributes."""
+        for module, name in _walk_modules(model):
+            self.add_layer(module, name)
 
     @property
     def export_path(self) -> str | None:
@@ -72,18 +72,18 @@ class PrintHook(BasePrintHook):
         self.summarize()
 
 
-_SUPPORTED_TYPES = (Layer, list, tuple)
+_SUPPORTED_TYPES = (Module, list, tuple)
 
 
-def _walk_layers(model: Layer) -> Generator[tuple[Layer, str], None, None]:
-    """Walks through model and yields all layers with generated names."""
-    seen = IdentitySet[Layer]()
+def _walk_modules(model: Module) -> Generator[tuple[Module, str], None, None]:
+    """Walks through model and yields all modules with generated names."""
+    seen = IdentitySet[Module]()
     seen.add(model)
     queue: deque[tuple[Any, str]] = deque([(model, "model")])
 
     while queue:
         obj, name = queue.popleft()
-        if isinstance(obj, Layer):
+        if isinstance(obj, Module):
             yield obj, name
             for k, v in obj.__dict__.items():
                 if v not in seen or isinstance(v, _SUPPORTED_TYPES):

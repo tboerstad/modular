@@ -12,7 +12,6 @@
 # ===----------------------------------------------------------------------=== #
 
 from .layer import (
-    Layer,
     Module,
     Shardable,
     add_layer_hook,
@@ -22,7 +21,6 @@ from .layer import (
 from .layer_list import LayerList
 
 __all__ = [
-    "Layer",
     "LayerList",
     "Module",
     "Shardable",

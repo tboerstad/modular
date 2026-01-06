@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from max.graph import TensorValue
 from max.nn.kv_cache import PagedCacheValues
-from max.nn.layer import Layer, Module
+from max.nn.layer import Module
 
 
 class Olmo2TransformerBlock(Module):
@@ -28,9 +28,9 @@ class Olmo2TransformerBlock(Module):
     def __init__(
         self,
         attention: Module,
-        mlp: Layer,
-        post_attention_layer_norm: Layer,
-        post_feedforward_layer_norm: Layer,
+        mlp: Module,
+        post_attention_layer_norm: Module,
+        post_feedforward_layer_norm: Module,
         residual_multiplier: float = 1.0,
     ) -> None:
         super().__init__()

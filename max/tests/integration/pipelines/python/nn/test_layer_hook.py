@@ -21,7 +21,7 @@ from max.dtype import DType
 from max.engine import InferenceSession
 from max.graph import DeviceRef, Graph, TensorType, TensorValue, ops
 from max.nn.hooks.print_hook import PrintHook
-from max.nn.layer import Layer, add_layer_hook, clear_hooks
+from max.nn.layer import Module, add_layer_hook, clear_hooks
 from pytest_mock import MockerFixture
 
 
@@ -31,10 +31,11 @@ def clear_hooks_between_tests():  # noqa: ANN201
     clear_hooks()
 
 
-class OuterLayer(Layer):
+class OuterModule(Module):
     def __init__(self) -> None:
-        self.inner_layer_1 = InnerLayer()
-        self.inner_layer_2 = InnerLayer()
+        super().__init__()
+        self.inner_layer_1 = InnerModule()
+        self.inner_layer_2 = InnerModule()
 
     def __call__(self, input: TensorValue) -> TensorValue:
         cast_input = input.cast(DType.int32)
@@ -43,13 +44,16 @@ class OuterLayer(Layer):
         return inner_2
 
 
-class InnerLayer(Layer):
+class InnerModule(Module):
+    def __init__(self) -> None:
+        super().__init__()
+
     def __call__(self, input: TensorValue) -> TensorValue:
         return input.transpose(0, 1)
 
 
 def test_hook_nested_layers(mocker: MockerFixture) -> None:
-    outer_layer = OuterLayer()
+    outer_layer = OuterModule()
 
     hook = mocker.Mock(side_effect=lambda *args: args[-1])
     add_layer_hook(hook)
@@ -98,7 +102,7 @@ def test_hook_nested_layers(mocker: MockerFixture) -> None:
 
 def test_hook_nested_hooks_returns(mocker: MockerFixture) -> None:
     # Test multiple hooks that modify the output value.
-    inner_layer = InnerLayer()
+    inner_layer = InnerModule()
     hook = mocker.Mock(side_effect=lambda *args: ops.tile(args[-1], [1, 2, 1]))
     hook2 = mocker.Mock(
         side_effect=lambda *args: ops.cast(args[-1], DType.float32)
@@ -154,7 +158,7 @@ def test_clear_hooks(mocker: MockerFixture) -> None:
     add_layer_hook(hook2)
     clear_hooks()
 
-    outer_layer = OuterLayer()
+    outer_layer = OuterModule()
     _ = Graph(
         "test_hook",
         outer_layer,
@@ -169,7 +173,10 @@ def test_clear_hooks(mocker: MockerFixture) -> None:
     assert hook2.call_count == 0
 
 
-class LayerWithArgsKwargs(Layer):
+class ModuleWithArgsKwargs(Module):
+    def __init__(self) -> None:
+        super().__init__()
+
     def __call__(
         self,
         arg1: TensorValue,
@@ -185,7 +192,7 @@ class LayerWithArgsKwargs(Layer):
 def test_hook_args_kwargs(mocker: MockerFixture) -> None:
     hook = mocker.Mock(side_effect=lambda *args: args[-1])
     add_layer_hook(hook)
-    layer = LayerWithArgsKwargs()
+    layer = ModuleWithArgsKwargs()
 
     g = Graph(
         "test_hook",
@@ -211,7 +218,7 @@ def test_hook_args_kwargs(mocker: MockerFixture) -> None:
 def test_hook_many_args_kwargs(mocker: MockerFixture) -> None:
     hook = mocker.Mock(side_effect=lambda *args: args[-1])
     add_layer_hook(hook)
-    layer = LayerWithArgsKwargs()
+    layer = ModuleWithArgsKwargs()
 
     g = Graph(
         "test_hook",
@@ -246,9 +253,9 @@ def test_hook_many_args_kwargs(mocker: MockerFixture) -> None:
 def test_print_hook_filter(
     session: InferenceSession, capfd: pytest.CaptureFixture
 ) -> None:
-    # Create a model with two inner layers and name them.
+    # Create a model with two inner modules and name them.
     print_hook = PrintHook(filter=["model.inner_layer_2"])
-    layer = OuterLayer()
+    layer = OuterModule()
     print_hook.name_layers(layer)
 
     g = Graph(

@@ -15,53 +15,40 @@ from collections.abc import Sequence
 
 from max.graph import TensorValue
 
-from .layer import Layer, Module
+from .layer import Module
 
 
 class LayerList(Module):
-    """Stores a list of layers.
+    """Stores a list of modules.
 
     Can be used as a regular python list."""
 
-    def __init__(self, layers: Sequence[Layer]) -> None:
+    def __init__(self, layers: Sequence[Module]) -> None:
         super().__init__()
         self.layers = list(layers)
 
-        # Only assign `Module` objects to Sequential.sublayers. We ensure that
-        # the V2 functionality (getting sublayers) is correct by throwing
-        # an error in the `sublayers` property if any layer is still V1.
         for n, layer in enumerate(layers):
-            if isinstance(layer, Module):
-                self._sublayers[str(n)] = layer
-
-    @property
-    def sublayers(self) -> dict[str, Module]:
-        if len(self._sublayers) != len(self.layers):
-            raise ValueError(
-                "Not all layers in this Sequential object have "
-                "been migrated to V2."
-            )
-        return super().sublayers
+            self._sublayers[str(n)] = layer
 
     def __len__(self) -> int:
         return len(self.layers)
 
-    def __getitem__(self, i: int) -> Layer:
+    def __getitem__(self, i: int) -> Module:
         return self.layers[i]
 
     def __delitem__(self, i: int) -> None:
         del self.layers[i]
 
-    def __setitem__(self, i: int, layer: Layer) -> None:
+    def __setitem__(self, i: int, layer: Module) -> None:
         self.layers[i] = layer
 
-    def insert(self, i: int, layer: Layer) -> None:
+    def insert(self, i: int, layer: Module) -> None:
         self.layers.insert(i, layer)
 
-    def append(self, layer: Layer) -> None:
+    def append(self, layer: Module) -> None:
         self.layers.append(layer)
 
-    def extend(self, layer: Layer) -> None:
+    def extend(self, layer: Module) -> None:
         self.layers.append(layer)
 
     def __str__(self) -> str:
