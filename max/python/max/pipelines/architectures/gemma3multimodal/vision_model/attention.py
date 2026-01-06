@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from typing import Any
 
 from max.dtype import DType
 from max.graph import DeviceRef, ShardingStrategy, TensorValue
@@ -37,29 +36,7 @@ class Gemma3VisionAttention(MultiheadAttention):
         devices: Sequence[DeviceRef] | None = None,
         dtype: DType = DType.bfloat16,
     ) -> None:
-        """Initialize Gemma3 vision attention layer.
-
-        Args:
-            hidden_size: The dimension of the hidden states (embed_dim).
-            num_attention_heads: The number of attention heads.
-            has_bias: Whether to use bias in QKV and output projections.
-            devices: Device(s) to place the weights and run the computation.
-                If multiple devices provided, uses distributed computation.
-            dtype: DType of the QKV and output projection weights.
-
-        Raises:
-            ValueError: If hidden_size is not divisible by num_attention_heads.
-        """
-        if hidden_size % num_attention_heads != 0:
-            raise ValueError(
-                f"hidden_size must be divisible by num_attention_heads "
-                f"(got `hidden_size`: {hidden_size} and `num_attention_heads`: "
-                f"{num_attention_heads})."
-            )
-
         head_dim = hidden_size // num_attention_heads
-        scale = head_dim ** (-0.5)
-
         devices_list = list(devices) if devices else []
 
         super().__init__(
@@ -67,35 +44,14 @@ class Gemma3VisionAttention(MultiheadAttention):
             hidden_size=hidden_size,
             devices=devices_list if devices_list else None,
             dtype=dtype,
-            scale=scale,
+            scale=head_dim ** (-0.5),
             qkv_has_bias=has_bias,
             o_proj_has_bias=has_bias,
             stacked_qkv=False,
         )
 
-        self.is_causal = False  # Vision attention is not causal
-
-        # Alias o_proj as out_proj to match HuggingFace weight naming
-        self.out_proj = self.o_proj
-
-    def __call__(  # type: ignore[override]
-        self,
-        x: TensorValue,
-        signal_buffers: None = None,
-        **kwargs: Any,
-    ) -> TensorValue:
-        """Forward pass of Gemma3 vision attention.
-
-        Args:
-            x: Input tensor of shape [batch_size, seq_length, hidden_size].
-            signal_buffers: Not used in vision attention (set to None).
-            **kwargs: Additional arguments, including optional attention_mask.
-
-        Returns:
-            attention_output: Output tensor of shape [batch_size, seq_length, hidden_size].
-        """
-        attention_mask = kwargs.get("attention_mask")
-        return self._forward_single(x, attention_mask=attention_mask)
+    def __call__(self, x: TensorValue, **kwargs) -> TensorValue:
+        return self._forward_single(x)
 
     @property
     def sharding_strategy(self) -> ShardingStrategy | None:
@@ -103,58 +59,25 @@ class Gemma3VisionAttention(MultiheadAttention):
 
     @sharding_strategy.setter
     def sharding_strategy(self, strategy: ShardingStrategy) -> None:
-        if not strategy.is_replicate:
-            raise ValueError(
-                "only replicate is currently supported for Gemma3VisionAttention"
-            )
-
         self.q_proj.sharding_strategy = strategy
         self.k_proj.sharding_strategy = strategy
         self.v_proj.sharding_strategy = strategy
         self.o_proj.sharding_strategy = strategy
 
-    def shard(
-        self, devices: Iterable[DeviceRef]
-    ) -> list[Gemma3VisionAttention]:
-        """Shard the attention module across multiple devices.
-
-        Args:
-            devices: Iterable of devices to shard across.
-
-        Returns:
-            List of Gemma3VisionAttention instances, one per device.
-        """
-        assert self.sharding_strategy
-
+    def shard(self, devices: Iterable[DeviceRef]) -> list[Gemma3VisionAttention]:
         devices_list = list(devices)
-        q_proj_shards = self.q_proj.shard(devices_list)
-        k_proj_shards = self.k_proj.shard(devices_list)
-        v_proj_shards = self.v_proj.shard(devices_list)
-        o_proj_shards = self.o_proj.shard(devices_list)
+        q_shards = self.q_proj.shard(devices_list)
+        k_shards = self.k_proj.shard(devices_list)
+        v_shards = self.v_proj.shard(devices_list)
+        o_shards = self.o_proj.shard(devices_list)
 
         shards = []
-        for device, q_shard, k_shard, v_shard, o_shard in zip(
-            devices_list,
-            q_proj_shards,
-            k_proj_shards,
-            v_proj_shards,
-            o_proj_shards,
-            strict=True,
+        for device, q, k, v, o in zip(
+            devices_list, q_shards, k_shards, v_shards, o_shards, strict=True
         ):
-            sharded = Gemma3VisionAttention(
-                hidden_size=self.embed_dim,
-                num_attention_heads=self.num_heads,
-                has_bias=self.qkv_has_bias,
-                devices=[device],
-                dtype=q_shard.weight.dtype,
+            s = Gemma3VisionAttention(
+                self.embed_dim, self.num_heads, self.qkv_has_bias, [device], q.weight.dtype
             )
-
-            sharded.q_proj = q_shard
-            sharded.k_proj = k_shard
-            sharded.v_proj = v_shard
-            sharded.o_proj = o_shard
-            sharded.out_proj = o_shard  # Keep alias in sync
-
-            shards.append(sharded)
-
+            s.q_proj, s.k_proj, s.v_proj, s.o_proj = q, k, v, o
+            shards.append(s)
         return shards
