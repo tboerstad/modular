@@ -316,7 +316,6 @@ class PixtralModel(PipelineModel[TextAndVisionContext], KVCacheMixin):
         weights: Weights,
         adapter: WeightsAdapter | None = None,
     ) -> dict[str, WeightData]:
-        pipeline_config = self.pipeline_config
         huggingface_config = self.huggingface_config
         if self.adapter:
             state_dict = self.adapter(

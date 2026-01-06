@@ -395,7 +395,6 @@ class Qwen2_5VLTokenizer(TextAndVisionTokenizer):
     ) -> Qwen2_5VLTextAndVisionContext:
         # Determine prompt
         prompt: str | Sequence[int]
-        add_special_tokens = True
         if request.prompt is not None:
             prompt = request.prompt
             if request.images:
@@ -417,7 +416,6 @@ class Qwen2_5VLTokenizer(TextAndVisionTokenizer):
                 prompt = self.apply_chat_template(new_request.messages)
         elif request.messages is not None:
             prompt = self.apply_chat_template(request.messages)
-            add_special_tokens = False
         else:
             raise ValueError(f"{request} does not provide messages or prompt.")
 

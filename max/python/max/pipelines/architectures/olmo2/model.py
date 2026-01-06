@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 from max.driver import Tensor
 from max.engine import InferenceSession, Model
-from max.graph import DeviceRef, Graph
+from max.graph import Graph
 from max.graph.weights import Weights, WeightsAdapter
 from max.nn.kv_cache import PagedCacheValues
 
@@ -51,9 +51,6 @@ class Olmo2Model(LlamaModelBase):
         session: InferenceSession | None = None,
     ) -> Graph:
         """Override to use Olmo2Config and Olmo2 model instead of Llama3."""
-
-        device0 = self.devices[0]
-        device_ref = DeviceRef(device0.label, device0.id)
 
         # Retrieve config using Olmo2Config instead of Llama3Config
         state_dict = self._get_state_dict(weights, adapter)

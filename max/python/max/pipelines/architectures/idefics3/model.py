@@ -379,7 +379,6 @@ class Idefics3Model(PipelineModel[TextAndVisionContext], KVCacheMixin):
         # Define input types for the vision model
         # Use static dimensions from the vision config
         image_size = config.vision_config.image_size
-        patch_size = config.vision_config.patch_size
 
         # Expect pre-extracted patches from the tokenizer.
         pixel_values_type = TensorType(
