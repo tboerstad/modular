@@ -276,7 +276,12 @@ class InternVLConfig(MAXModelConfig, InternVLConfigBase):
                 return_logits=return_logits,
                 norm_method=norm_method,
                 attention_bias=True,  # Qwen2 uses attention bias
-            )  # type: ignore
+            )
+        else:
+            raise ValueError(
+                f"Unsupported LLM config type: {ConfigCls}. "
+                "Expected Qwen2Config or Qwen3Config."
+            )
 
         return InternVLConfig(
             devices=[
