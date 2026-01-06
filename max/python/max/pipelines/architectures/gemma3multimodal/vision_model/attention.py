@@ -20,7 +20,6 @@ from typing import Any
 from max.dtype import DType
 from max.graph import DeviceRef, ShardingStrategy, TensorValue
 from max.nn.attention.multihead_attention import MultiheadAttention
-from max.nn.linear import Linear
 
 
 class Gemma3VisionAttention(MultiheadAttention):
@@ -51,7 +50,6 @@ class Gemma3VisionAttention(MultiheadAttention):
         Raises:
             ValueError: If hidden_size is not divisible by num_attention_heads.
         """
-        # Validate that embed_dim is divisible by num_heads
         if hidden_size % num_attention_heads != 0:
             raise ValueError(
                 f"hidden_size must be divisible by num_attention_heads "
@@ -60,7 +58,6 @@ class Gemma3VisionAttention(MultiheadAttention):
             )
 
         head_dim = hidden_size // num_attention_heads
-        # Scale factor for attention: 1/sqrt(head_dim)
         scale = head_dim ** (-0.5)
 
         devices_list = list(devices) if devices else []
@@ -78,36 +75,8 @@ class Gemma3VisionAttention(MultiheadAttention):
 
         self.is_causal = False  # Vision attention is not causal
 
-        # Override the output projection with PyTorch-compatible naming
-        self._init_pytorch_compatible_weights(dtype)
-
-    def _init_pytorch_compatible_weights(self, dtype: DType) -> None:
-        """Initialize output projection with PyTorch-compatible naming."""
-        # Replace o_proj with out_proj to match PyTorch naming
-        self.out_proj = Linear(
-            in_dim=self.embed_dim,
-            out_dim=self.embed_dim,
-            has_bias=self.o_proj_has_bias,
-            dtype=dtype,
-            device=self.devices[0],
-        )
-        # Remove the original o_proj to avoid conflicts
-        if hasattr(self, "o_proj"):
-            delattr(self, "o_proj")
-
-    def _forward_single(self, x: TensorValue, **kwargs) -> TensorValue:
-        """Single-device forward pass with PyTorch-compatible naming.
-
-        Override to use out_proj instead of o_proj.
-        """
-        # Compute QKV
-        q, k, v = self._compute_qkv(x)
-
-        # Apply attention
-        attn_out = self._apply_attention(q, k, v, **kwargs)
-
-        # Output projection using PyTorch-compatible naming
-        return self.out_proj(attn_out)
+        # Alias o_proj as out_proj to match HuggingFace weight naming
+        self.out_proj = self.o_proj
 
     def __call__(  # type: ignore[override]
         self,
@@ -125,13 +94,8 @@ class Gemma3VisionAttention(MultiheadAttention):
         Returns:
             attention_output: Output tensor of shape [batch_size, seq_length, hidden_size].
         """
-        # Extract attention_mask from kwargs if provided
         attention_mask = kwargs.get("attention_mask")
-
-        # Use our custom _forward_single method for the core attention computation
-        attn_output = self._forward_single(x, attention_mask=attention_mask)
-
-        return attn_output
+        return self._forward_single(x, attention_mask=attention_mask)
 
     @property
     def sharding_strategy(self) -> ShardingStrategy | None:
@@ -147,7 +111,7 @@ class Gemma3VisionAttention(MultiheadAttention):
         self.q_proj.sharding_strategy = strategy
         self.k_proj.sharding_strategy = strategy
         self.v_proj.sharding_strategy = strategy
-        self.out_proj.sharding_strategy = strategy
+        self.o_proj.sharding_strategy = strategy
 
     def shard(
         self, devices: Iterable[DeviceRef]
@@ -166,15 +130,15 @@ class Gemma3VisionAttention(MultiheadAttention):
         q_proj_shards = self.q_proj.shard(devices_list)
         k_proj_shards = self.k_proj.shard(devices_list)
         v_proj_shards = self.v_proj.shard(devices_list)
-        out_proj_shards = self.out_proj.shard(devices_list)
+        o_proj_shards = self.o_proj.shard(devices_list)
 
         shards = []
-        for device, q_shard, k_shard, v_shard, out_shard in zip(
+        for device, q_shard, k_shard, v_shard, o_shard in zip(
             devices_list,
             q_proj_shards,
             k_proj_shards,
             v_proj_shards,
-            out_proj_shards,
+            o_proj_shards,
             strict=True,
         ):
             sharded = Gemma3VisionAttention(
@@ -188,7 +152,8 @@ class Gemma3VisionAttention(MultiheadAttention):
             sharded.q_proj = q_shard
             sharded.k_proj = k_shard
             sharded.v_proj = v_shard
-            sharded.out_proj = out_shard
+            sharded.o_proj = o_shard
+            sharded.out_proj = o_shard  # Keep alias in sync
 
             shards.append(sharded)
 
