@@ -61,8 +61,11 @@ class Gemma3VisionEncoderLayer(Module):
         )
 
         self.self_attn = Gemma3VisionAttention(
-            config=config,
-            layer_idx=layer_idx,
+            hidden_size=vision_config.hidden_size,
+            num_attention_heads=vision_config.num_attention_heads,
+            has_bias=vision_config.attention_bias,
+            devices=[self.device],
+            dtype=vision_dtype,
         )
 
         self.mlp = Gemma3VisionMLP(config, device=self.device)
