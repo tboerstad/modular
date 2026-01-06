@@ -23,6 +23,7 @@ GEMMA3_LANGUAGE_SAFETENSOR_MAP: dict[str, str] = {
 GEMMA3_MULTIMODAL_SAFETENSOR_MAP: dict[str, str] = {
     "vision_tower.vision_model.": "",
     "multi_modal_": "",
+    "self_attn.out_proj": "self_attn.o_proj",
 }
 
 
