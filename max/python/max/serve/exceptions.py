@@ -38,8 +38,12 @@ Suggested solutions:
 """)
 
 
-# TODO: include other patterns (e.g. AMD) here
-_oom_message_pattern = re.compile(".*OUT_OF_MEMORY.*")
+# Matches OOM patterns from various GPU vendors:
+# - NVIDIA/CUDA: "OUT_OF_MEMORY"
+# - AMD/HIP: "out of memory", "hipErrorOutOfMemory"
+_oom_message_pattern = re.compile(
+    r".*(OUT_OF_MEMORY|out of memory|hipErrorOutOfMemory).*", re.IGNORECASE
+)
 
 
 def detect_and_wrap_oom(exception: Exception) -> None:
