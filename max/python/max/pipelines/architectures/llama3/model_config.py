@@ -258,21 +258,18 @@ class Llama3Config(MAXModelConfig, Llama3ConfigBase):
         # Normalize the LLM state dict so downstream introspection sees canonical
         # Llama-style keys (no "language_model." or "model." prefix). This keeps
         # float8 parsing and feature detection resilient to pack variations.
-        def _strip_prefix(s: str, prefix: str) -> str:
-            return s.removeprefix(prefix)
-
         has_lm_prefix = any(k.startswith("language_model.") for k in state_dict)
         has_model_prefix = any(k.startswith("model.") for k in state_dict)
 
         if has_lm_prefix:
             normalized_state_dict: dict[str, WeightData] = {
-                _strip_prefix(k, "language_model."): v
+                k.removeprefix("language_model."): v
                 for k, v in state_dict.items()
                 if k.startswith("language_model.")
             }
         elif has_model_prefix:
             normalized_state_dict = {
-                _strip_prefix(k, "model."): v
+                k.removeprefix("model."): v
                 for k, v in state_dict.items()
                 if k.startswith("model.")
             }

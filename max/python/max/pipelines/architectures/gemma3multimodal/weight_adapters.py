@@ -50,17 +50,14 @@ def convert_safetensor_vision_state_dict(
 
     # include vision tower weights AND multi modal weights
     for weight_name, value in state_dict.items():
-        if not weight_name.startswith("vision_tower.vision_model."):
-            if not weight_name.startswith("multi_modal_"):
-                continue
+        if not (weight_name.startswith("vision_tower.vision_model.") or
+                weight_name.startswith("multi_modal_")):
+            continue
 
         max_name = weight_name
-
         for before, after in GEMMA3_MULTIMODAL_SAFETENSOR_MAP.items():
             max_name = max_name.replace(before, after)
 
-        weight_data = value.data()
-
-        new_state_dict[max_name] = weight_data
+        new_state_dict[max_name] = value.data()
 
     return new_state_dict
