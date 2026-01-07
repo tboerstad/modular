@@ -28,17 +28,27 @@ def kernel_verification_ops_path() -> Path:
     return Path(os.environ["MODULAR_KERNEL_VERIFICATION_OPS_PATH"])
 
 
+@pytest.fixture
+def dummy_tensor_type() -> TensorType:
+    return TensorType(DType.int32, [1], device=DeviceRef.CPU())
+
+
+@pytest.fixture
+def dummy_tensor() -> Tensor:
+    return Tensor.from_numpy(np.full([1], 1, np.int32))
+
+
 def test_custom_op_with_int_parameter(
     kernel_verification_ops_path: Path,
     session: InferenceSession,
     capfd: pytest.CaptureFixture,
+    dummy_tensor_type: TensorType,
+    dummy_tensor: Tensor,
 ) -> None:
     expected_int = 42
 
-    unimportant_for_test_tensor_type = TensorType(
-        DType.int32, [1], device=DeviceRef.CPU()
-    )
-    unimportant_for_test_tensor = Tensor.from_numpy(np.full([1], 1, np.int32))
+    unimportant_for_test_tensor_type = dummy_tensor_type
+    unimportant_for_test_tensor = dummy_tensor
     graph = Graph(
         "test_op_with_int_parameter",
         input_types=[unimportant_for_test_tensor_type],
@@ -67,14 +77,14 @@ def test_custom_op_with_dtype_parameter(
     kernel_verification_ops_path: Path,
     session: InferenceSession,
     capfd: pytest.CaptureFixture,
+    dummy_tensor_type: TensorType,
+    dummy_tensor: Tensor,
 ) -> None:
     expected_dtype = DType.int32
     expected_dtype_str = "int32"
 
-    unimportant_for_test_tensor_type = TensorType(
-        DType.int32, [1], device=DeviceRef.CPU()
-    )
-    unimportant_for_test_tensor = Tensor.from_numpy(np.full([1], 1, np.int32))
+    unimportant_for_test_tensor_type = dummy_tensor_type
+    unimportant_for_test_tensor = dummy_tensor
     graph = Graph(
         "test_op_with_dtype_parameter",
         input_types=[unimportant_for_test_tensor_type],
@@ -103,13 +113,13 @@ def test_custom_op_with_static_string_parameter(
     kernel_verification_ops_path: Path,
     session: InferenceSession,
     capfd: pytest.CaptureFixture,
+    dummy_tensor_type: TensorType,
+    dummy_tensor: Tensor,
 ) -> None:
     expected_string = "Socrates is a man"
 
-    unimportant_for_test_tensor_type = TensorType(
-        DType.int32, [1], device=DeviceRef.CPU()
-    )
-    unimportant_for_test_tensor = Tensor.from_numpy(np.full([1], 1, np.int32))
+    unimportant_for_test_tensor_type = dummy_tensor_type
+    unimportant_for_test_tensor = dummy_tensor
     graph = Graph(
         "test_op_with_static_string_parameter",
         input_types=[unimportant_for_test_tensor_type],

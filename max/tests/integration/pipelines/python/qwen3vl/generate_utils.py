@@ -126,11 +126,9 @@ def run_text_generation(
     return run_text_generation_with_custom_image_processing(
         model=model,
         data_processor=data_processor,
-        device=device,
         textgen_requests=textgen_requests,
         num_steps=num_steps,
         print_outputs=print_outputs,
-        use_cache=use_cache,
         request_processor_fn=request_processor,
     )
 
@@ -140,17 +138,14 @@ def run_text_generation_with_custom_image_processing(
     data_processor: PreTrainedTokenizer
     | PreTrainedTokenizerFast
     | AutoProcessor,
-    device: torch.device,
     textgen_requests: Iterable[MockTextGenerationRequest],
     num_steps: int,
     print_outputs: bool,
     request_processor_fn: Callable[
         [MockTextGenerationRequest], dict[str, torch.Tensor]
     ],
-    use_cache: bool | None = None,
 ) -> list[dict[str, Any]]:
     """Run text generation with custom request processing for specialized models."""
-    del device, use_cache  # Unused.
     saved_logits, store_logits = _create_logits_store()
     results = []
 
@@ -169,18 +164,7 @@ def run_text_generation_with_custom_image_processing(
         if print_outputs:
             # Trim outputs
             input_ids = inputs["input_ids"]
-            if isinstance(input_ids, torch.Tensor):
-                input_length = (
-                    input_ids.shape[1]
-                    if len(input_ids.shape) > 1
-                    else len(input_ids)
-                )
-            else:
-                input_length = (
-                    len(input_ids[0])
-                    if isinstance(input_ids, list)
-                    else len(input_ids)
-                )
+            input_length = input_ids.shape[1] if isinstance(input_ids, torch.Tensor) and len(input_ids.shape) > 1 else len(input_ids[0] if isinstance(input_ids, list) else input_ids)
             outputs_trimmed = outputs[:, input_length:]
             print(
                 "Prompt:",

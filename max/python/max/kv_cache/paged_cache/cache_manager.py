@@ -343,13 +343,9 @@ class PagedKVCacheManager:
         Returns:
             Updated cache input tuples with incremented lengths.
         """
-        blocks = [kv_cache_inputs[i].blocks for i in range(len(self.devices))]
-        cache_lengths = [
-            kv_cache_inputs[i].cache_lengths for i in range(len(self.devices))
-        ]
-        lookup_table = [
-            kv_cache_inputs[i].lookup_table for i in range(len(self.devices))
-        ]
+        blocks = [cache_input.blocks for cache_input in kv_cache_inputs]
+        cache_lengths = [cache_input.cache_lengths for cache_input in kv_cache_inputs]
+        lookup_table = [cache_input.lookup_table for cache_input in kv_cache_inputs]
 
         if self.params.data_parallel_degree > 1:
             data_parallel_splits = prev_model_inputs.data_parallel_splits
@@ -375,7 +371,7 @@ class PagedKVCacheManager:
 
         start_idx = 0
         for devices in self.devices_per_replica:
-            # max_lengths is ho st allocated and the same across each replica.
+            # max_lengths is host allocated and the same across each replica.
             max_lengths = kv_cache_inputs[start_idx].max_lengths
 
             # Advance to the next step of the max_lengths tensor.
