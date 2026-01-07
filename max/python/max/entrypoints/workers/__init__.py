@@ -16,7 +16,6 @@ import signal
 import sys
 from contextlib import AsyncExitStack
 from types import FrameType
-from typing import Optional
 
 import uvloop
 from max.interfaces import PipelineTask
