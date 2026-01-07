@@ -1160,7 +1160,7 @@ class OpenAICompletionResponseGenerator(
                 system_fingerprint=None,
             )
             return response
-        except:
+        except Exception:
             status_code = 500
             raise
         finally:

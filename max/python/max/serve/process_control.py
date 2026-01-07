@@ -157,7 +157,7 @@ async def run_subprocess(
             value, exception = await get_result()
 
             exitcode = await proc.join_async()
-        except:
+        except BaseException:
             # likely cancelled from outside.
             # send some signals and try one more time to join()
             kill_task = asyncio.create_task(proc.term_then_kill())

@@ -206,7 +206,7 @@ def process_telemetry(
             try:
                 for m in ms:
                     commit_fn(m)
-            except:
+            except Exception:
                 logger.exception("Error processing telemetry")
     except KeyboardInterrupt:
         pass

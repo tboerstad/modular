@@ -178,7 +178,7 @@ class ParamSpace:
             if not isinstance(self.value, list):
                 self.value = [self.value]
             self.value = [eval(x) for x in self.value]
-        except:
+        except Exception:
             pass
         # Note: as of python3.7+ the built-in dict is guaranteed to maintain insertion order.
         self.value_set = list(dict.fromkeys(utils.flatten(self.value)))
@@ -519,7 +519,7 @@ class Spec:
                 v = v.strip()
                 try:
                     vals[i] = eval(v)
-                except:
+                except Exception:
                     vals[i] = v
             d[name].extend(vals)
         return d

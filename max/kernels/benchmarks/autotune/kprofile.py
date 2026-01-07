@@ -256,7 +256,7 @@ def profile_results(
 ) -> TuningSpec | None:
     try:
         pkl = KbenchPKL(pickle_path=pickle_path, metric=metric)
-    except:
+    except Exception:
         print(f"Invalid pkl [{pickle_path}]")
         print(LINE)
         return None

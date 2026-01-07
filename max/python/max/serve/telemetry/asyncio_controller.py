@@ -123,7 +123,7 @@ class AsyncioTelemetryController:
 
             try:
                 m.commit()
-            except:
+            except Exception:
                 logger.warning("Failed to record telemetry", exc_info=True)
 
         logger.debug(

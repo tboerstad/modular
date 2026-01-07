@@ -147,7 +147,7 @@ class KernelLibrary:
     _context: mlir.Context
     _analysis: _graph.Analysis
 
-    def __init__(self, context: mlir.Context, paths: list[Path] = []) -> None:  # noqa: B006
+    def __init__(self, context: mlir.Context, paths: list[Path] | None = None) -> None:
         # TODO(GEX-1846): This is a terrible workaround to initialize M::Context on the Graph API.
         # Get rid of this and properly setup the context instead.
         from max.driver import CPU
@@ -157,7 +157,7 @@ class KernelLibrary:
         mock_session._impl.register_runtime_context(context)
 
         self._context = context
-        self._analysis = _graph.Analysis(context, paths)
+        self._analysis = _graph.Analysis(context, paths if paths is not None else [])
 
     def library_paths(self) -> list[Path]:
         """Returns the list of kernel library paths.
