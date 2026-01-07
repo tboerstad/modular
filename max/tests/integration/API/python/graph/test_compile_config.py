@@ -28,7 +28,6 @@ def compile_config_ops_path() -> Path:
     return Path(os.environ["MODULAR_COMPILE_CONFIG_OPS_PATH"])
 
 
-@pytest.mark.skip
 def test_compile_config_split_k_reduction_scheme(
     session: InferenceSession, compile_config_ops_path: Path
 ) -> None:

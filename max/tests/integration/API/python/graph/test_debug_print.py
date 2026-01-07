@@ -309,7 +309,6 @@ def test_debug_print_binary_max_bf16_shapes(
 
 
 @pytest.mark.parametrize("dtype", list(DType))
-@pytest.mark.skip
 def test_save_load_all_dtypes(
     session: InferenceSession, tmp_path: Path, dtype: DType
 ) -> None:
