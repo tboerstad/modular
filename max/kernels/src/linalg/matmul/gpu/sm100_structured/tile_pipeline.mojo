@@ -275,12 +275,12 @@ struct ProducerStage[
     @always_inline
     fn get_a_tile(self, k_idx: Int) -> Self.ATile:
         """Get A tile at the specified k-group index."""
-        return self._a_tiles[self._stage * Self.k_group_size + k_idx]
+        return self.get_tile(k_idx)[0]
 
     @always_inline
     fn get_b_tile(self, k_idx: Int) -> Self.BTile:
         """Get B tile at the specified k-group index."""
-        return self._b_tiles[self._stage * Self.k_group_size + k_idx]
+        return self.get_tile(k_idx)[1]
 
     @always_inline
     fn expect_bytes(self, num_bytes: Int):
@@ -364,12 +364,12 @@ struct ConsumerStage[
     @always_inline
     fn get_a_tile(self, k_idx: Int) -> Self.ATile:
         """Get A tile at the specified k-group index."""
-        return self._a_tiles[self._stage * Self.k_group_size + k_idx]
+        return self.get_tile(k_idx)[0]
 
     @always_inline
     fn get_b_tile(self, k_idx: Int) -> Self.BTile:
         """Get B tile at the specified k-group index."""
-        return self._b_tiles[self._stage * Self.k_group_size + k_idx]
+        return self.get_tile(k_idx)[1]
 
     @always_inline
     fn mbar(self) -> MbarPtr:
