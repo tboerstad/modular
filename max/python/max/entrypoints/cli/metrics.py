@@ -29,6 +29,7 @@ class TextGenerationMetrics:
     time_to_first_token: float | str
     prompt_eval_throughput: float | str
     eval_throughput: float | str
+    total_tokens_per_second: float | str
 
     _start_time: float
     _signposts: dict[str, float]
@@ -122,9 +123,14 @@ class TextGenerationMetrics:
             )
             self.requests_per_second: Any = self.batch_size / total_batch_time
             self.total_exe_time: Any = total_batch_time * 1000
+            total_tokens = (
+                self.prompt_size + self.output_size
+            ) * self.batch_size
+            self.total_tokens_per_second = total_tokens / total_batch_time
         else:
             self.total_exe_time = "n/a"
             self.requests_per_second = "n/a"
+            self.total_tokens_per_second = "n/a"
 
     def _print_report(self, print_raw: bool = False) -> None:
         print()
@@ -141,6 +147,11 @@ class TextGenerationMetrics:
         print(
             "Eval throughput (token-generation):",
             self.eval_throughput,
+            "tokens per second",
+        )
+        print(
+            "Total tokens per second:",
+            self.total_tokens_per_second,
             "tokens per second",
         )
         print("Total Latency:", self.total_exe_time, "ms")
