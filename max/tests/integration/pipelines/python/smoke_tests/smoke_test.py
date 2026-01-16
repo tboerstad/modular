@@ -216,20 +216,67 @@ def write_github_output(key: str, value: str) -> None:
 
 
 def gracefully_stop_process(process: Popen[bytes]) -> None:
-    process.send_signal(signal.SIGINT)  # Sends ctrl-c (usually works)
+    """Stop a process gracefully, with escalating force.
+
+    Attempts: SIGINT -> SIGTERM -> SIGKILL
+    This function is designed to never raise an exception.
+    """
+    # Check if process is already dead
+    if process.poll() is not None:
+        return
+
+    # Step 1: Try SIGINT (ctrl-c)
     try:
-        process.wait(5)
+        process.send_signal(signal.SIGINT)
+        process.wait(timeout=5)
+        return
     except TimeoutExpired:
         logger.warning("Server did not stop after ctrl-c, trying SIGTERM")
+    except OSError:
+        # Process may have already terminated
+        if process.poll() is not None:
+            return
+
+    # Step 2: Try SIGTERM on the process group
+    try:
+        pgid = os.getpgid(process.pid)
+        os.killpg(pgid, signal.SIGTERM)
+        process.wait(timeout=5)
+        return
+    except ProcessLookupError:
+        # Process or process group already dead
+        return
+    except TimeoutExpired:
+        logger.warning("Process did not terminate gracefully, forcing kill")
+    except OSError:
+        if process.poll() is not None:
+            return
+
+    # Step 3: Force kill with SIGKILL
+    try:
+        pgid = os.getpgid(process.pid)
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        # Process already dead
+        pass
+
+    # Final wait - SIGKILL should always work, but use longer timeout
+    try:
+        process.wait(timeout=10)
+    except TimeoutExpired:
+        logger.error(
+            "Process did not die after SIGKILL - this should not happen"
+        )
+        # Last resort: try killing just the main process directly
         try:
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-            process.wait(5)
-        except ProcessLookupError:
-            pass  # process already dead
-        except TimeoutExpired:
-            logger.warning("Process did not terminate gracefully, forcing kill")
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-            process.wait(5)
+            process.kill()
+            process.wait(timeout=5)
+        except Exception:
+            # Give up gracefully - don't let shutdown failures crash the test
+            logger.error("Failed to kill process, giving up")
+    except OSError:
+        # Process already reaped
+        pass
 
 
 @dataclass
