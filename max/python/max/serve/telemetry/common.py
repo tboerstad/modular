@@ -186,6 +186,51 @@ COLOR_MAP = {
 }
 
 
+class ConditionalLevelFormatter(logging.Formatter):
+    """Formatter that only shows log level prefix for WARNING and above."""
+
+    def __init__(
+        self,
+        fmt: str | None = None,
+        datefmt: str | None = None,
+        color_code: str = "",
+        color_terminator: str = "",
+    ):
+        super().__init__(fmt, datefmt)
+        self.color_code = color_code
+        self.color_terminator = color_terminator
+
+    def format(self, record: logging.LogRecord) -> str:
+        # Build level prefix only for WARNING and above
+        if record.levelno >= logging.WARNING:
+            level_prefix = f"{self.color_code}{record.levelname}:{self.color_terminator} "
+        else:
+            level_prefix = ""
+
+        # Format timestamp
+        timestamp = self.formatTime(record, self.datefmt)
+        msecs = f".{int(record.msecs):03d}"
+
+        # Build the final message
+        message = record.getMessage()
+        formatted = f"{timestamp}{msecs} {level_prefix}{message}"
+
+        # Handle exception info if present
+        if record.exc_info:
+            if not record.exc_text:
+                record.exc_text = self.formatException(record.exc_info)
+        if record.exc_text:
+            if formatted[-1:] != "\n":
+                formatted = formatted + "\n"
+            formatted = formatted + record.exc_text
+        if record.stack_info:
+            if formatted[-1:] != "\n":
+                formatted = formatted + "\n"
+            formatted = formatted + self.formatStack(record.stack_info)
+
+        return formatted
+
+
 class PrefixFormatter(logging.Formatter):
     """Custom formatter that adds a prefix to log messages."""
 
@@ -256,11 +301,10 @@ def configure_logging(
                 timestamp=True,
             )
         else:
-            console_formatter = logging.Formatter(
-                (
-                    f"{color_code}%(asctime)s.%(msecs)03d %(levelname)s:{color_terminator} %(message)s"
-                ),
+            console_formatter = ConditionalLevelFormatter(
                 datefmt="%H:%M:%S",
+                color_code=color_code,
+                color_terminator=color_terminator,
             )
 
         # Apply log prefix if provided
@@ -288,8 +332,7 @@ def configure_logging(
                 timestamp=True,
             )
         else:
-            file_formatter = logging.Formatter(
-                ("%(asctime)s.%(msecs)03d %(levelname)s: %(message)s"),
+            file_formatter = ConditionalLevelFormatter(
                 datefmt="%y:%m:%d-%H:%M:%S",
             )
 

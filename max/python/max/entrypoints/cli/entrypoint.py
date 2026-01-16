@@ -20,6 +20,47 @@ import logging
 import click
 
 
+class ConditionalLevelFormatter(logging.Formatter):
+    """Formatter that only shows log level prefix for WARNING and above."""
+
+    def __init__(
+        self,
+        fmt: str | None = None,
+        datefmt: str | None = None,
+    ):
+        super().__init__(fmt, datefmt)
+
+    def format(self, record: logging.LogRecord) -> str:
+        # Build level prefix only for WARNING and above
+        if record.levelno >= logging.WARNING:
+            level_prefix = f"{record.levelname}: "
+        else:
+            level_prefix = ""
+
+        # Format timestamp
+        timestamp = self.formatTime(record, self.datefmt)
+        msecs = f".{int(record.msecs):03d}"
+
+        # Build the final message
+        message = record.getMessage()
+        formatted = f"{timestamp}{msecs} {level_prefix}{message}"
+
+        # Handle exception info if present
+        if record.exc_info:
+            if not record.exc_text:
+                record.exc_text = self.formatException(record.exc_info)
+        if record.exc_text:
+            if formatted[-1:] != "\n":
+                formatted = formatted + "\n"
+            formatted = formatted + record.exc_text
+        if record.stack_info:
+            if formatted[-1:] != "\n":
+                formatted = formatted + "\n"
+            formatted = formatted + self.formatStack(record.stack_info)
+
+        return formatted
+
+
 class PrefixFormatter(logging.Formatter):
     """Formatter that adds a prefix to log messages."""
 
@@ -61,8 +102,7 @@ def configure_cli_logging(
 
     # Create console handler
     console_handler = logging.StreamHandler()
-    console_formatter: logging.Formatter = logging.Formatter(
-        "%(asctime)s.%(msecs)03d %(levelname)s: %(message)s",
+    console_formatter: logging.Formatter = ConditionalLevelFormatter(
         datefmt="%H:%M:%S",
     )
 
