@@ -15,10 +15,12 @@
 from __future__ import annotations
 
 import faulthandler
+import logging
 import os
 import signal
 import sys
 import threading
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from enum import Enum, IntEnum, auto
 from inspect import Parameter, Signature
@@ -48,6 +50,8 @@ CustomExtensionsType = Sequence[CustomExtensionType] | CustomExtensionType
 
 ScalarType = (int, float, bool, np.generic)
 InputType = DLPackArray | Buffer | int | float | bool | np.generic
+
+logger = logging.getLogger("max.engine")
 
 
 class GPUProfilingMode(str, Enum):
@@ -386,10 +390,15 @@ class InferenceSession:
 
             with self._compilation_lock:
                 try:
+                    compile_start = time.perf_counter()
                     _model = self._impl.compile_from_object(
                         model._module._CAPIPtr,  # type: ignore
                         custom_extensions_final,
                         model.name,
+                    )
+                    compile_time = time.perf_counter() - compile_start
+                    logger.info(
+                        f"Graph compilation took {compile_time:.1f} seconds"
                     )
                 except Exception as e:
                     raise RuntimeError(
@@ -419,7 +428,10 @@ class InferenceSession:
             # Initialization requires device memory allocation which virtual devices don't support
             return _model
 
+        load_start = time.perf_counter()
         _model._load(weights_registry_real)
+        load_time = time.perf_counter() - load_start
+        logger.info(f"Loading weights took {load_time:.1f} seconds")
         return _model
 
     def set_debug_print_options(
