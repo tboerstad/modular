@@ -21,16 +21,19 @@ logger = logging.getLogger("max.pipelines")
 
 
 class CompilationTimer:
-    """Timer for logging graph build and compilation phases.
+    """Timer for logging weight loading, graph build, and compilation phases.
 
-    Starts timing on initialization. Call ``mark_build_complete()`` after
-    graph building, then ``done()`` after compilation to log all timings.
+    Starts timing on initialization. Optionally call ``mark_weights_loaded()``
+    after weight loading, then ``mark_build_complete()`` after graph building,
+    then ``done()`` after compilation to log all timings.
 
     Args:
         name: The name to use in log messages (e.g., "model", "vision model").
 
     Example:
         >>> timer = CompilationTimer("model")
+        >>> state_dict = {k: v.data() for k, v in weights.items()}
+        >>> timer.mark_weights_loaded()
         >>> graph = self._build_graph(self.weights, self.adapter)
         >>> timer.mark_build_complete()
         >>> model = session.load(graph, weights_registry=self.state_dict)
@@ -39,16 +42,31 @@ class CompilationTimer:
 
     def __init__(self, name: str) -> None:
         self.name = name
+        self._weights_end_time: float = 0.0
         self._build_end_time: float = 0.0
         logger.info(f"Building and compiling {self.name}...")
         self._start_time = time.perf_counter()
 
+    def mark_weights_loaded(self) -> None:
+        """Mark the end of the weight loading phase and log time."""
+        self._weights_end_time = time.perf_counter()
+        logger.info(
+            f"Loading {self.name} weights took "
+            f"{self._weights_end_time - self._start_time:.1f} seconds"
+        )
+
     def mark_build_complete(self) -> None:
         """Mark the end of the build phase and log build time."""
         self._build_end_time = time.perf_counter()
+        # Measure from after weights if weights were loaded, otherwise from start
+        start = (
+            self._weights_end_time
+            if self._weights_end_time > 0
+            else self._start_time
+        )
         logger.info(
             f"Building {self.name} graph took "
-            f"{self._build_end_time - self._start_time:.1f} seconds"
+            f"{self._build_end_time - start:.1f} seconds"
         )
 
     def done(self) -> None:

@@ -310,6 +310,7 @@ class Gemma3_MultiModalModel(PipelineModel[TextAndVisionContext], KVCacheMixin):
         )
 
         # Get processed state dict for language and vision models
+        weights_timer = CompilationTimer("weights")
         weights_dict = dict(self.weights.items())
         language_weights_dict = convert_safetensor_language_state_dict(
             weights_dict
@@ -317,6 +318,7 @@ class Gemma3_MultiModalModel(PipelineModel[TextAndVisionContext], KVCacheMixin):
         vision_weights_dict = convert_safetensor_vision_state_dict(weights_dict)
 
         raw_state_dict = {k: v.data() for k, v in weights_dict.items()}
+        weights_timer.mark_weights_loaded()
         model_config = Gemma3ForConditionalGenerationConfig.generate(
             pipeline_config=self.pipeline_config,
             huggingface_config=self.huggingface_config,

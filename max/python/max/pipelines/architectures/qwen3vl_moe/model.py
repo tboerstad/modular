@@ -260,6 +260,7 @@ class Qwen3VLModel(
             )
 
         # Get processed state dict
+        weights_timer = CompilationTimer("weights")
         if self.adapter:
             model_state_dict = self.adapter(
                 dict(self.weights.items()),
@@ -282,6 +283,7 @@ class Qwen3VLModel(
                 raise ValueError(
                     f"Key: {key} is not part of the vision or language model"
                 )
+        weights_timer.mark_weights_loaded()
 
         # Generate Qwen3VL config from HuggingFace config
         qwen3vl_config = Qwen3VLConfig.generate(
