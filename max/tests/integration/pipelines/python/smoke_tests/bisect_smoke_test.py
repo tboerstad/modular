@@ -290,12 +290,17 @@ def start_bisect(
     Returns the exit code from git bisect run.
     """
     repo_root = find_repo_root()
-    script_path = Path(__file__).resolve()
+
+    # Copy script to temp location outside repo - git bisect checkouts would
+    # otherwise overwrite/delete the script mid-bisect
+    script_tmpdir = tempfile.mkdtemp(prefix="bisect_script_")
+    script_copy = Path(script_tmpdir) / "bisect_smoke_test.py"
+    shutil.copy2(Path(__file__).resolve(), script_copy)
 
     # Build the test command
     test_cmd = [
         sys.executable,
-        str(script_path),
+        str(script_copy),
         "--test",
         "--model",
         model,
@@ -349,6 +354,7 @@ def start_bisect(
         # Always reset bisect state
         logger.info("Resetting git bisect state")
         subprocess.run(["git", "bisect", "reset"], cwd=repo_root)
+        shutil.rmtree(script_tmpdir, ignore_errors=True)
 
 
 @click.command()
