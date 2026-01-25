@@ -65,7 +65,7 @@ def run_smoke_test(model: str, output_path: Path, num_questions: int) -> bool:
         str(num_questions),
     ]
     print(f"Running: {' '.join(cmd)}")
-    return subprocess.call(cmd, cwd=repo_root, timeout=3600) == 0
+    return subprocess.run(cmd, cwd=repo_root, timeout=3600).returncode == 0
 
 
 def parse_results(output_path: Path, model: str) -> dict[str, float] | None:
@@ -162,20 +162,15 @@ def start_bisect(
     if vision_threshold is not None:
         test_cmd.extend(["--vision-threshold", str(vision_threshold)])
 
-    try:
-        subprocess.run(["git", "bisect", "start"], cwd=repo_root, check=True)
-        subprocess.run(["git", "bisect", "bad", bad_commit], cwd=repo_root, check=True)
-        subprocess.run(
-            ["git", "bisect", "good", good_commit], cwd=repo_root, check=True
-        )
+    subprocess.run(["git", "bisect", "start"], cwd=repo_root, check=True)
+    subprocess.run(["git", "bisect", "bad", bad_commit], cwd=repo_root, check=True)
+    subprocess.run(["git", "bisect", "good", good_commit], cwd=repo_root, check=True)
 
-        print(f"Running bisect: {' '.join(test_cmd)}")
-        result = subprocess.run(["git", "bisect", "run"] + test_cmd, cwd=repo_root)
-        subprocess.run(["git", "bisect", "log"], cwd=repo_root)
-        return result.returncode
-    finally:
-        subprocess.run(["git", "bisect", "reset"], cwd=repo_root)
-        shutil.rmtree(script_tmpdir, ignore_errors=True)
+    print(f"Running bisect: {' '.join(test_cmd)}")
+    result = subprocess.run(["git", "bisect", "run"] + test_cmd, cwd=repo_root)
+    subprocess.run(["git", "bisect", "log"], cwd=repo_root)
+    shutil.rmtree(script_tmpdir, ignore_errors=True)
+    return result.returncode
 
 
 @click.command()
