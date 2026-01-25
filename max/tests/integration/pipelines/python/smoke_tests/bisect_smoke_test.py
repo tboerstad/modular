@@ -49,7 +49,7 @@ def find_repo_root() -> Path:
     raise RuntimeError("Could not find repository root")
 
 
-def run_smoke_test(model: str, output_path: Path, num_questions: int) -> bool:
+def run_smoke_test(model: str, output_path: Path) -> bool:
     repo_root = find_repo_root()
     cmd = [
         str(repo_root / "bazelw"),
@@ -61,8 +61,6 @@ def run_smoke_test(model: str, output_path: Path, num_questions: int) -> bool:
         "max-ci",
         "--output-path",
         str(output_path),
-        "--num-questions",
-        str(num_questions),
     ]
     print(f"Running: {' '.join(cmd)}")
     return subprocess.run(cmd, cwd=repo_root, timeout=3600).returncode == 0
@@ -108,13 +106,12 @@ def test_commit(
     model: str,
     text_threshold: float | None,
     vision_threshold: float | None,
-    num_questions: int,
 ) -> int:
     has_thresholds = text_threshold is not None or vision_threshold is not None
 
     with tempfile.TemporaryDirectory() as tmpdir:
         output_path = Path(tmpdir)
-        success = run_smoke_test(model, output_path, num_questions)
+        success = run_smoke_test(model, output_path)
 
         if not success:
             return BISECT_SKIP if has_thresholds else BISECT_BAD
@@ -139,7 +136,6 @@ def start_bisect(
     bad_commit: str,
     text_threshold: float | None,
     vision_threshold: float | None,
-    num_questions: int,
 ) -> int:
     repo_root = find_repo_root()
 
@@ -154,8 +150,6 @@ def start_bisect(
         "--test",
         "--model",
         model,
-        "--num-questions",
-        str(num_questions),
     ]
     if text_threshold is not None:
         test_cmd.extend(["--text-threshold", str(text_threshold)])
@@ -179,7 +173,6 @@ def start_bisect(
 @click.option("--bad-commit", help="Known bad commit")
 @click.option("--text-threshold", type=float, help="Min text accuracy")
 @click.option("--vision-threshold", type=float, help="Min vision accuracy")
-@click.option("--num-questions", type=int, default=320, help="Questions per task")
 @click.option("--test", is_flag=True, help="Test current commit (used by git bisect)")
 def main(
     model: str,
@@ -187,11 +180,10 @@ def main(
     bad_commit: str | None,
     text_threshold: float | None,
     vision_threshold: float | None,
-    num_questions: int,
     test: bool,
 ) -> None:
     if test:
-        sys.exit(test_commit(model, text_threshold, vision_threshold, num_questions))
+        sys.exit(test_commit(model, text_threshold, vision_threshold))
 
     if not good_commit or not bad_commit:
         raise click.UsageError("--good-commit and --bad-commit are required")
@@ -203,7 +195,6 @@ def main(
             bad_commit,
             text_threshold,
             vision_threshold,
-            num_questions,
         )
     )
 
