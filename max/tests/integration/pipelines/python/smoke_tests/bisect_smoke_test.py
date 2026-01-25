@@ -154,6 +154,10 @@ def start_bisect(
         "--test",
         "--model",
         model,
+        "--good-commit",
+        good_commit,
+        "--bad-commit",
+        bad_commit,
         "--num-questions",
         str(num_questions),
     ]
@@ -175,8 +179,8 @@ def start_bisect(
 
 @click.command()
 @click.option("--model", required=True, help="HuggingFace model path")
-@click.option("--good-commit", default=None, help="Known good commit")
-@click.option("--bad-commit", default=None, help="Known bad commit")
+@click.option("--good-commit", required=True, help="Known good commit")
+@click.option("--bad-commit", required=True, help="Known bad commit")
 @click.option("--text-threshold", type=float, default=None, help="Min text accuracy")
 @click.option(
     "--vision-threshold", type=float, default=None, help="Min vision accuracy"
@@ -185,8 +189,8 @@ def start_bisect(
 @click.option("--test", is_flag=True, help="Test current commit (used by git bisect)")
 def main(
     model: str,
-    good_commit: str | None,
-    bad_commit: str | None,
+    good_commit: str,
+    bad_commit: str,
     text_threshold: float | None,
     vision_threshold: float | None,
     num_questions: int,
@@ -194,9 +198,6 @@ def main(
 ) -> None:
     if test:
         sys.exit(test_commit(model, text_threshold, vision_threshold, num_questions))
-
-    if good_commit is None or bad_commit is None:
-        raise click.UsageError("--good-commit and --bad-commit are required")
 
     sys.exit(
         start_bisect(
