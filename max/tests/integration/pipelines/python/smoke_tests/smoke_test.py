@@ -500,16 +500,27 @@ def smoke_test(
             results.append(result)
             all_samples.append(samples)
     finally:
-        summary = build_eval_summary(results, startup_time_seconds=startup_time)
+        # Ensure server shutdown happens even if result processing fails
+        try:
+            if results:
+                summary = build_eval_summary(
+                    results, startup_time_seconds=startup_time
+                )
 
-        if output_path is not None:
-            path = output_path / safe_model_name(model)
-            path.mkdir(parents=True, exist_ok=True)
-            write_results(path, summary, results, all_samples, tasks)
+                if output_path is not None:
+                    path = output_path / safe_model_name(model)
+                    path.mkdir(parents=True, exist_ok=True)
+                    write_results(path, summary, results, all_samples, tasks)
 
-        logger.info(pformat(summary, indent=2))
-
-        gracefully_stop_process(server_process)
+                logger.info(pformat(summary, indent=2))
+            else:
+                logger.warning(
+                    "No results to process - evaluation may have failed"
+                )
+        except Exception as e:
+            logger.error(f"Error processing results: {e}", exc_info=True)
+        finally:
+            gracefully_stop_process(server_process)
 
 
 if __name__ == "__main__":
