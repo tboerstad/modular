@@ -33,7 +33,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-import click
+import argparse
 
 BISECT_GOOD = 0
 BISECT_BAD = 1
@@ -174,26 +174,21 @@ def start_bisect(
     return result.returncode
 
 
-@click.command()
-@click.option("--model", required=True, help="HuggingFace model path")
-@click.option("--good-commit", help="Known good commit")
-@click.option("--bad-commit", help="Known bad commit")
-@click.option("--text-threshold", type=float, help="Min text accuracy")
-@click.option("--vision-threshold", type=float, help="Min vision accuracy")
-@click.option("--test", is_flag=True, help="Test current commit (used by git bisect)")
-def main(
-    model: str,
-    good_commit: str | None,
-    bad_commit: str | None,
-    text_threshold: float | None,
-    vision_threshold: float | None,
-    test: bool,
-) -> None:
-    if test:
-        sys.exit(test_commit(model, text_threshold, vision_threshold))
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Git bisect helper for smoke test regressions")
+    parser.add_argument("--model", required=True, help="HuggingFace model path")
+    parser.add_argument("--good-commit", help="Known good commit")
+    parser.add_argument("--bad-commit", help="Known bad commit")
+    parser.add_argument("--text-threshold", type=float, help="Min text accuracy")
+    parser.add_argument("--vision-threshold", type=float, help="Min vision accuracy")
+    parser.add_argument("--test", action="store_true", help="Test current commit (used by git bisect)")
+    args = parser.parse_args()
 
-    if not good_commit or not bad_commit:
-        raise click.UsageError("--good-commit and --bad-commit are required")
+    if args.test:
+        sys.exit(test_commit(args.model, args.text_threshold, args.vision_threshold))
+
+    if not args.good_commit or not args.bad_commit:
+        parser.error("--good-commit and --bad-commit are required")
 
     # Copy script outside repo so git checkout doesn't overwrite it
     with tempfile.TemporaryDirectory(prefix="bisect_script_") as tmpdir:
@@ -202,11 +197,11 @@ def main(
         sys.exit(
             start_bisect(
                 script_path,
-                model,
-                good_commit,
-                bad_commit,
-                text_threshold,
-                vision_threshold,
+                args.model,
+                args.good_commit,
+                args.bad_commit,
+                args.text_threshold,
+                args.vision_threshold,
             )
         )
 
