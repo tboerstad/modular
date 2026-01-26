@@ -100,12 +100,12 @@ def check_thresholds(
 ) -> bool:
     """Determine if accuracy regression occurred by comparing against thresholds."""
     if text_threshold is not None:
-        if results.get("text", 0) < text_threshold:
-            print(f"Text accuracy {results.get('text')} < {text_threshold}")
+        if results["text"] < text_threshold:
+            print(f"Text accuracy {results['text']} < {text_threshold}")
             return False
     if vision_threshold is not None:
-        if results.get("vision", 0) < vision_threshold:
-            print(f"Vision accuracy {results.get('vision')} < {vision_threshold}")
+        if results["vision"] < vision_threshold:
+            print(f"Vision accuracy {results['vision']} < {vision_threshold}")
             return False
     return True
 
