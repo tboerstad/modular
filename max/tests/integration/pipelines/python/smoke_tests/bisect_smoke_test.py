@@ -41,6 +41,7 @@ BISECT_SKIP = 125
 
 
 def find_repo_root() -> Path:
+    """Locate repo root so we can run bazel from the correct directory."""
     current = Path.cwd()
     while current != current.parent:
         if (current / ".git").exists():
@@ -72,6 +73,7 @@ def run_smoke_test(model: str, output_path: Path) -> bool | None:
 
 
 def parse_results(output_path: Path, model: str) -> dict[str, float] | None:
+    """Extract accuracy metrics from smoke test output for threshold comparison."""
     model_dir = output_path / model.lower().strip().replace("/", "__")
     metrics_file = model_dir / "eval_metrics.json"
 
@@ -96,6 +98,7 @@ def check_thresholds(
     text_threshold: float | None,
     vision_threshold: float | None,
 ) -> bool:
+    """Determine if accuracy regression occurred by comparing against thresholds."""
     if text_threshold is not None:
         if results.get("text", 0) < text_threshold:
             print(f"Text accuracy {results.get('text')} < {text_threshold}")
@@ -112,6 +115,7 @@ def test_commit(
     text_threshold: float | None,
     vision_threshold: float | None,
 ) -> int:
+    """Called by git bisect to test each commit and return appropriate exit code."""
     has_thresholds = text_threshold is not None or vision_threshold is not None
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -145,6 +149,7 @@ def start_bisect(
     text_threshold: float | None,
     vision_threshold: float | None,
 ) -> int:
+    """Initialize git bisect and run it with this script as the test command."""
     repo_root = find_repo_root()
 
     test_cmd = [
