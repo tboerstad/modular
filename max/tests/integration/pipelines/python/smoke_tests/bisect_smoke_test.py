@@ -49,7 +49,8 @@ def find_repo_root() -> Path:
     raise RuntimeError("Could not find repository root")
 
 
-def run_smoke_test(model: str, output_path: Path) -> bool:
+def run_smoke_test(model: str, output_path: Path) -> bool | None:
+    """Returns True on success, False on failure, None on timeout."""
     repo_root = find_repo_root()
     cmd = [
         str(repo_root / "bazelw"),
@@ -63,7 +64,11 @@ def run_smoke_test(model: str, output_path: Path) -> bool:
         str(output_path),
     ]
     print(f"Running: {' '.join(cmd)}")
-    return subprocess.run(cmd, cwd=repo_root, timeout=3600).returncode == 0
+    try:
+        return subprocess.run(cmd, cwd=repo_root, timeout=1800).returncode == 0
+    except subprocess.TimeoutExpired:
+        print("Smoke test timed out after 30 minutes")
+        return None
 
 
 def parse_results(output_path: Path, model: str) -> dict[str, float] | None:
@@ -113,6 +118,8 @@ def test_commit(
         output_path = Path(tmpdir)
         success = run_smoke_test(model, output_path)
 
+        if success is None:
+            return BISECT_SKIP
         if not success:
             return BISECT_SKIP if has_thresholds else BISECT_BAD
 
@@ -131,6 +138,7 @@ def test_commit(
 
 
 def start_bisect(
+    script_path: Path,
     model: str,
     good_commit: str,
     bad_commit: str,
@@ -139,14 +147,9 @@ def start_bisect(
 ) -> int:
     repo_root = find_repo_root()
 
-    # Copy script outside repo so git checkout doesn't overwrite it
-    script_tmpdir = tempfile.mkdtemp(prefix="bisect_script_")
-    script_copy = Path(script_tmpdir) / "bisect_smoke_test.py"
-    shutil.copy2(Path(__file__).resolve(), script_copy)
-
     test_cmd = [
         sys.executable,
-        str(script_copy),
+        str(script_path),
         "--test",
         "--model",
         model,
@@ -163,7 +166,6 @@ def start_bisect(
     print(f"Running bisect: {' '.join(test_cmd)}")
     result = subprocess.run(["git", "bisect", "run"] + test_cmd, cwd=repo_root)
     subprocess.run(["git", "bisect", "log"], cwd=repo_root)
-    shutil.rmtree(script_tmpdir, ignore_errors=True)
     return result.returncode
 
 
@@ -188,15 +190,20 @@ def main(
     if not good_commit or not bad_commit:
         raise click.UsageError("--good-commit and --bad-commit are required")
 
-    sys.exit(
-        start_bisect(
-            model,
-            good_commit,
-            bad_commit,
-            text_threshold,
-            vision_threshold,
+    # Copy script outside repo so git checkout doesn't overwrite it
+    with tempfile.TemporaryDirectory(prefix="bisect_script_") as tmpdir:
+        script_path = Path(tmpdir) / "bisect_smoke_test.py"
+        shutil.copy2(Path(__file__).resolve(), script_path)
+        sys.exit(
+            start_bisect(
+                script_path,
+                model,
+                good_commit,
+                bad_commit,
+                text_threshold,
+                vision_threshold,
+            )
         )
-    )
 
 
 if __name__ == "__main__":
