@@ -34,10 +34,19 @@ import tempfile
 from pathlib import Path
 
 import argparse
+import socket
+import time
 
 BISECT_GOOD = 0
 BISECT_BAD = 1
 BISECT_SKIP = 125
+SERVER_PORT = 8000
+
+
+def port_in_use(port: int) -> bool:
+    """Check if a port is in use."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", port)) == 0
 
 
 def find_repo_root() -> Path:
@@ -52,6 +61,8 @@ def find_repo_root() -> Path:
 
 def run_smoke_test(model: str, output_path: Path) -> bool | None:
     """Returns True on success, False on failure, None on timeout."""
+    assert not port_in_use(SERVER_PORT), f"Port {SERVER_PORT} already in use"
+
     repo_root = find_repo_root()
     cmd = [
         str(repo_root / "bazelw"),
@@ -65,11 +76,18 @@ def run_smoke_test(model: str, output_path: Path) -> bool | None:
         str(output_path),
     ]
     print(f"Running: {' '.join(cmd)}")
+    proc = subprocess.Popen(cmd, cwd=repo_root)
     try:
-        return subprocess.run(cmd, cwd=repo_root, timeout=1800).returncode == 0
+        returncode = proc.wait(timeout=1800)
     except subprocess.TimeoutExpired:
-        print("Smoke test timed out after 30 minutes")
+        print("Smoke test timed out after 30 minutes, killing process")
+        proc.kill()
+        proc.wait()
         return None
+    finally:
+        time.sleep(5)  # Give server time to release resources
+
+    return returncode == 0
 
 
 def parse_results(output_path: Path, model: str) -> dict[str, float] | None:
