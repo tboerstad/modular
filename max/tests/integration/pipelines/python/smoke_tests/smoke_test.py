@@ -130,10 +130,22 @@ def get_server_cmd(framework: str, model: str) -> list[str]:
     VLLM = "vllm.entrypoints.openai.api_server --max-model-len 16384 --limit-mm-per-prompt.video 0"
     MAX = "max.entrypoints.pipelines serve"
 
+    # Check if this is a Deepseek MoE model that needs parallel config
+    is_deepseek = "deepseek" in model.lower()
+
     if gpu_count > 1:
         MAX += f" --devices gpu:{','.join(str(i) for i in range(gpu_count))}"
         VLLM += f" --tensor-parallel-size={gpu_count}"
         SGLANG += f" --tp-size={gpu_count}"
+
+    # Add parallel configuration for Deepseek MoE models
+    if is_deepseek and gpu_count > 1:
+        # vLLM: data parallelism and expert parallelism
+        VLLM += f" --data-parallel-size={gpu_count} --enable-expert-parallel"
+        # SGLang: data parallelism and expert parallelism
+        SGLANG += f" --dp-size={gpu_count} --ep={gpu_count}"
+        # MAX: data parallelism and expert parallelism
+        MAX += f" --data-parallel-degree={gpu_count} --ep-size={gpu_count}"
 
     if _inside_bazel():
         assert framework == "max-ci", "bazel invocation only supports max-ci"
