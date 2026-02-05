@@ -204,28 +204,8 @@ class MoE(Module, Shardable):
         self.ep_size = ep_size
         self.dtype = dtype
         self.apply_router_weight_first = apply_router_weight_first
-        self.gate = gate_cls(
-            devices=devices,
-            hidden_dim=hidden_dim,
-            num_experts=num_experts,
-            num_experts_per_token=num_experts_per_token,
-            dtype=DType.bfloat16,
-        )
         self.num_local_experts = num_experts // ep_size
         self.float8_config = float8_config
-
-        if has_shared_experts:
-            assert shared_experts_dim > 0, (
-                "shared_experts_dim must be greater than 0"
-            )
-            self.shared_experts = mlp_cls(
-                dtype=dtype,
-                quantization_encoding=None,
-                hidden_dim=self.hidden_dim,
-                feed_forward_length=self.shared_experts_dim,
-                devices=self.devices,
-                float8_config=self.float8_config,
-            )
 
         if ep_batch_manager:
             assert not apply_router_weight_first, (
@@ -235,6 +215,27 @@ class MoE(Module, Shardable):
             self._ep_batch_manager = ep_batch_manager
 
         if not is_sharding:
+            self.gate = gate_cls(
+                devices=devices,
+                hidden_dim=hidden_dim,
+                num_experts=num_experts,
+                num_experts_per_token=num_experts_per_token,
+                dtype=DType.bfloat16,
+            )
+
+            if has_shared_experts:
+                assert shared_experts_dim > 0, (
+                    "shared_experts_dim must be greater than 0"
+                )
+                self.shared_experts = mlp_cls(
+                    dtype=dtype,
+                    quantization_encoding=None,
+                    hidden_dim=self.hidden_dim,
+                    feed_forward_length=self.shared_experts_dim,
+                    devices=self.devices,
+                    float8_config=self.float8_config,
+                )
+
             self._init_experts()
 
     def _init_experts(self) -> None:
