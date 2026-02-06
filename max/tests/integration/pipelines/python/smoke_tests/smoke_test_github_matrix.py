@@ -32,13 +32,15 @@ RUNNERS = {
 # Framework → GPUs that framework cannot run on.
 HW_EX = {"vllm": {"MI355", "8xMI355"}, "sglang": {"MI355", "8xMI355"}}
 
-# Tag: skip model on multi-GPU runners.
-MULTI = {"2xH100", "8xB200", "8xMI355"}
+# Tags: skip model on multi-GPU runners.
+XL    = {"8xB200", "8xMI355"}
+MULTI = {"2xH100"} | XL
 
 # Model → set of exclusion tags:
 #   - framework        (e.g. "max")
 #   - gpu              (e.g. "MI355")
 #   - framework@gpu    (e.g. "sglang@B200")
+#   - use XL           to skip on 8xB200 and 8xMI355
 #   - use MULTI        to skip on all multi-GPU runners
 #
 # If you want to add a model to the smoke test:
@@ -63,7 +65,7 @@ MODELS: dict[str, set[str]] = {
     "google/gemma-3-12b-it":
         MULTI,
     "google/gemma-3-27b-it":
-        {"8xB200", "8xMI355"},
+        XL,
     "meta-llama/llama-3.1-8b-instruct":
         MULTI,
     "meta-llama/llama-3.2-1b-instruct":
@@ -91,17 +93,17 @@ MODELS: dict[str, set[str]] = {
     "qwen/qwen3-8b":
         MULTI,
     "qwen/qwen3-vl-4b-instruct":
-        {"8xB200", "8xMI355", "vllm@B200"},
+        XL | {"vllm@B200"},
     "qwen/qwen3-vl-4b-instruct-fp8":
-        {"8xB200", "8xMI355", "max", "MI355", "max-ci@H100", "max-ci@2xH100"},  # max: 26.2, MI355: no FP8
+        XL | {"max", "MI355", "max-ci@H100", "max-ci@2xH100"},  # max: 26.2, MI355: no FP8
     "qwen/qwen3-vl-30b-a3b-instruct":
-        {"8xB200", "8xMI355", "max@H100", "max@2xH100", "max-ci@H100", "max-ci@2xH100"},
+        XL | {"max@H100", "max@2xH100", "max-ci@H100", "max-ci@2xH100"},
     "qwen/qwen3-vl-30b-a3b-instruct-fp8":
-        {"8xB200", "8xMI355", "max", "MI355", "max-ci@H100", "max-ci@2xH100", "sglang@B200"},  # max: 26.2, MI355: no FP8
+        XL | {"max", "MI355", "max-ci@H100", "max-ci@2xH100", "sglang@B200"},  # max: 26.2, MI355: no FP8
     "qwen/qwen3-vl-30b-a3b-thinking":
-        {"8xB200", "8xMI355", "max", "max-ci@H100", "max-ci@2xH100"},
+        XL | {"max", "max-ci@H100", "max-ci@2xH100"},
     "redhatai/gemma-3-27b-it-fp8-dynamic":
-        {"8xB200", "8xMI355"},
+        XL,
     "redhatai/meta-llama-3.1-405b-instruct-fp8-dynamic":
         {"H100", "B200", "MI355", "2xH100"},
     "tbmod/gemma-3-4b-it":
