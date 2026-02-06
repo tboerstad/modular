@@ -33,8 +33,9 @@ RUNNERS = {
 HW_EX = {"vllm": {"MI355", "8xMI355"}, "sglang": {"MI355", "8xMI355"}}
 
 # Tags: skip model on multi-GPU runners.
-XL    = {"8xB200", "8xMI355"}
-MULTI = {"2xH100"} | XL
+XL     = {"8xB200", "8xMI355"}
+MULTI  = {"2xH100"} | XL
+NON_XL = set(RUNNERS) - XL
 
 # Model → set of exclusion tags:
 #   - framework        (e.g. "max")
@@ -42,6 +43,7 @@ MULTI = {"2xH100"} | XL
 #   - framework@gpu    (e.g. "sglang@B200")
 #   - use XL           to skip on 8xB200 and 8xMI355
 #   - use MULTI        to skip on all multi-GPU runners
+#   - use NON_XL       to skip on everything except 8xB200 and 8xMI355
 #
 # If you want to add a model to the smoke test:
 #   1. Trigger the smoke test job with the model name you want to add:
@@ -105,7 +107,7 @@ MODELS: dict[str, set[str]] = {
     "redhatai/gemma-3-27b-it-fp8-dynamic":
         XL,
     "redhatai/meta-llama-3.1-405b-instruct-fp8-dynamic":
-        {"H100", "B200", "MI355", "2xH100"},
+        NON_XL,
     "tbmod/gemma-3-4b-it":
         MULTI | {"H100"},  # B200 only, copy of gemma-3-4b
     "unsloth/gpt-oss-20b-bf16":
