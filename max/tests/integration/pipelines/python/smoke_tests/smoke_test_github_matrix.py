@@ -56,8 +56,8 @@ NON_XL = set(RUNNERS) - XL
 MODELS: dict[str, set[str]] = {
     "allenai/olmOCR-2-7B-1025-FP8": MULTI | {"sglang"},
     "bytedance-seed/academic-ds-9b": MULTI | {"max", "max-ci@MI355", "sglang@B200", "vllm@B200"},
-    "deepseek-ai/deepseek-r1-0528": NON_XL | {"sglang", "max", "8xMI355"},  # 8xMI355: needs nvshmem
-    "deepseek-ai/deepseek-v2-lite-chat": MULTI | {"max-ci", "max", "vllm@B200"},  # E2EOPT-571
+    "deepseek-ai/deepseek-r1-0528": NON_XL | {"max", "sglang", "8xMI355"},  # 8xMI355: needs nvshmem
+    "deepseek-ai/deepseek-v2-lite-chat": MULTI | {"max", "max-ci", "vllm@B200"},  # E2EOPT-571
     "google/gemma-3-1b-it": MULTI | {"vllm@B200"},
     "google/gemma-3-12b-it": MULTI,
     "google/gemma-3-27b-it": XL,
@@ -75,10 +75,10 @@ MODELS: dict[str, set[str]] = {
     "qwen/qwen3-30b-a3b-instruct-2507": MULTI,
     "qwen/qwen3-8b": MULTI,
     "qwen/qwen3-vl-4b-instruct": XL | {"vllm@B200"},
-    "qwen/qwen3-vl-4b-instruct-fp8": XL | {"max", "MI355", "max-ci@H100", "max-ci@2xH100"},  # max: 26.2, MI355: no FP8
-    "qwen/qwen3-vl-30b-a3b-instruct": XL | {"max@H100", "max@2xH100", "max-ci@H100", "max-ci@2xH100"},
-    "qwen/qwen3-vl-30b-a3b-instruct-fp8": XL | {"max", "MI355", "max-ci@H100", "max-ci@2xH100", "sglang@B200"},  # max: 26.2, MI355: no FP8
-    "qwen/qwen3-vl-30b-a3b-thinking": XL | {"max", "max-ci@H100", "max-ci@2xH100"},
+    "qwen/qwen3-vl-4b-instruct-fp8": XL | {"max", "MI355", "max-ci@2xH100", "max-ci@H100"},  # max: 26.2, MI355: no FP8
+    "qwen/qwen3-vl-30b-a3b-instruct": XL | {"max-ci@2xH100", "max-ci@H100", "max@2xH100", "max@H100"},
+    "qwen/qwen3-vl-30b-a3b-instruct-fp8": XL | {"max", "MI355", "max-ci@2xH100", "max-ci@H100", "sglang@B200"},  # max: 26.2, MI355: no FP8
+    "qwen/qwen3-vl-30b-a3b-thinking": XL | {"max", "max-ci@2xH100", "max-ci@H100"},
     "redhatai/gemma-3-27b-it-fp8-dynamic": XL,
     "redhatai/meta-llama-3.1-405b-instruct-fp8-dynamic": NON_XL,
     "tbmod/gemma-3-4b-it": MULTI | {"H100"},  # B200 only, copy of gemma-3-4b
