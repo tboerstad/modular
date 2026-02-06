@@ -138,13 +138,13 @@ def get_server_cmd(framework: str, model: str) -> list[str]:
     VLLM = "vllm.entrypoints.openai.api_server --max-model-len 16384 --limit-mm-per-prompt.video 0"
     MAX = "max.entrypoints.pipelines serve"
 
-    is_huge_model = is_deepseek(model)
-    if is_huge_model and framework != "sglang":
-        MAX += f" --device-memory-utilization 0.8 --devices gpu:{','.join(str(i) for i in range(gpu_count))} --ep-size {gpu_count} --data-parallel-degree {gpu_count} --max-batch-input-tokens 1024"
+    gpu_devices = ",".join(str(i) for i in range(gpu_count))
+    if is_deepseek(model) and framework != "sglang":
+        MAX += f" --device-memory-utilization 0.8 --devices gpu:{gpu_devices} --ep-size {gpu_count} --data-parallel-degree {gpu_count} --max-batch-input-tokens 1024"
         VLLM += f" --enable-chunked-prefill --gpu-memory-utilization 0.8 --data-parallel-size={gpu_count} --enable-expert-parallel"
         # Have not been successful in getting SGLang to work with R1 yet
     elif gpu_count > 1:
-        MAX += f" --devices gpu:{','.join(str(i) for i in range(gpu_count))}"
+        MAX += f" --devices gpu:{gpu_devices}"
         VLLM += f" --tensor-parallel-size={gpu_count}"
         SGLANG += f" --tp-size={gpu_count}"
 
@@ -178,25 +178,14 @@ def safe_model_name(model: str) -> str:
 def call_eval(
     model: str, task: str, *, max_concurrent: int, num_questions: int
 ) -> tuple[EvalResults, EvalSamples]:
-    extra_gen_kwargs = ""
-    is_reasoning_model = any(
-        kw in model
-        for kw in (
-            "academic-ds",
-            "deepseek-r1",
-            "gpt-oss",
-            "internvl3_5",
-            "qwen3",
-        )
-    )
-    # Reasoning models needs extra tokens for .. reasoning
-    if is_reasoning_model:
-        extra_gen_kwargs = ",max_gen_toks=4096"
-
+    gen_kwargs = ["seed=42", "temperature=0"]
+    # Reasoning models need extra tokens for .. reasoning
+    if any(kw in model for kw in ("academic-ds", "deepseek-r1", "gpt-oss", "internvl3_5", "qwen3")):
+        gen_kwargs.append("max_gen_toks=4096")
     # GPT-OSS sometimes gets stuck in a reasoning loop. To ensure consistency
     # in CI, we add a repetition penalty which helps prevent the loop
     if "gpt-oss" in model:
-        extra_gen_kwargs = extra_gen_kwargs + ",repetition_penalty=1.1"
+        gen_kwargs.append("repetition_penalty=1.1")
 
     interpreter = sys.executable if _inside_bazel() else ".venv-eval/bin/python"
 
@@ -212,7 +201,7 @@ def call_eval(
             f"--output_path={tempdir}",
             f"--limit={num_questions}",
             "--seed=42",
-            f"--gen_kwargs=seed=42,temperature=0{extra_gen_kwargs}",
+            f"--gen_kwargs={','.join(gen_kwargs)}",
             f"--include_path={include_path}",
             "--fewshot_as_multiturn",
         ]
@@ -225,9 +214,10 @@ def call_eval(
 
 
 def parse_eval_results(loc: Path) -> tuple[EvalResults, EvalSamples]:
-    samples = []
-    for line in open(next(loc.glob("**/samples*.jsonl")), encoding="utf-8"):
-        samples.append(json.loads(line))
+    samples = [
+        json.loads(line)
+        for line in open(next(loc.glob("**/samples*.jsonl")), encoding="utf-8")
+    ]
 
     results = json.loads(next(loc.glob("**/results*.json")).read_text("utf-8"))
 
@@ -468,36 +458,19 @@ def smoke_test(
     cmd = get_server_cmd(framework, model)
 
     # TODO Refactor this to a model list/matrix specifying type of model
-    is_vision_model = any(
-        kw in model
-        for kw in (
-            "gemma-3",
-            "idefics",
-            "internvl",
-            "olmocr",
-            "pixtral",
-            "qwen2.5-vl",
-            "qwen3-vl",
-            "vision",
-        )
+    # gemma-3-1b is non-vision, tbmod is temporary to test legacy impl
+    is_vision_model = (
+        any(kw in model for kw in ("gemma-3", "idefics", "internvl", "olmocr", "pixtral", "qwen2.5-vl", "qwen3-vl", "vision"))
+        and "gemma-3-1b" not in model
+        and model != "tbmod/gemma-3-4b-it"
     )
-    # 1b is non-vision, tbmod is temporary to test legacy impl
-    if "gemma-3-1b" in model or model == "tbmod/gemma-3-4b-it":
-        is_vision_model = False
-
-    tasks = [TEXT_TASK]
-    if is_vision_model:
-        tasks = [VISION_TASK] + tasks
+    tasks = [VISION_TASK, TEXT_TASK] if is_vision_model else [TEXT_TASK]
 
     logger.info(f"Starting server with command:\n {' '.join(cmd)}")
     results = []
     all_samples = []
-    extra_env = {}
-    timeout = 900
-    if model == "tbmod/gemma-3-4b-it":
-        extra_env = {"MODULAR_MAX_DISABLE_GEMMA3_VISION": "1"}
-    elif is_deepseek(model):
-        timeout = 1800
+    timeout = 1800 if is_deepseek(model) else 900
+    extra_env = {"MODULAR_MAX_DISABLE_GEMMA3_VISION": "1"} if model == "tbmod/gemma-3-4b-it" else {}
 
     server_process, startup_time = start_server(cmd, extra_env, timeout)
     try:
