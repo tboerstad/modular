@@ -59,7 +59,7 @@ MODELS: dict[str, set[str]] = {
     "bytedance-seed/academic-ds-9b":
         MULTI | {"max", "max-ci@MI355", "sglang@B200", "vllm@B200"},
     "deepseek-ai/deepseek-r1-0528":
-        {"sglang", "max", "H100", "B200", "MI355", "2xH100", "8xMI355"},  # 8xMI355: needs nvshmem
+        NON_XL | {"sglang", "max", "8xMI355"},  # 8xMI355: needs nvshmem
     "deepseek-ai/deepseek-v2-lite-chat":
         MULTI | {"max-ci", "max", "vllm@B200"},  # E2EOPT-571
     "google/gemma-3-1b-it":
