@@ -23,6 +23,7 @@ import sys
 import time
 import traceback
 from collections.abc import Callable, Generator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO
@@ -1421,6 +1422,16 @@ PIPELINES = {
         " frontier of passing absolute and relative tolerance combinations."
     ),
 )
+@click.option(
+    "--max-workers",
+    type=int,
+    default=None,
+    help=(
+        "Maximum number of pipelines to verify in parallel. "
+        "Defaults to None (all pipelines run concurrently). "
+        "Set to 1 for serial execution."
+    ),
+)
 def main(
     report: TextIO | None,
     store_verdicts_json: Path | None,
@@ -1430,6 +1441,7 @@ def main(
     tag_filter: TagFilter,
     find_tolerances: bool,
     print_suggested_tolerances: bool,
+    max_workers: int | None,
 ) -> None:
     """Run logit-level comparisons of a Modular pipeline against a reference."""
 
@@ -1444,14 +1456,19 @@ def main(
 
     verdicts: dict[str, VerificationVerdict] = {}
     if pipeline is None:
-        for pipeline_name, pipeline_def in PIPELINES.items():
-            if device_type not in pipeline_def.compatible_with:
-                continue
-            if not tag_filter.satisfied_by(pipeline_def.tags):
-                continue
+        pipelines_to_run = {
+            name: pdef
+            for name, pdef in PIPELINES.items()
+            if device_type in pdef.compatible_with
+            and tag_filter.satisfied_by(pdef.tags)
+        }
+
+        def _run_single_pipeline(
+            pipeline_name: str, pipeline_def: PipelineDef
+        ) -> tuple[str, VerificationVerdict]:
             start_time = time.time()
             print(f"\n===== Running {pipeline_name} =====", flush=True)
-            verdicts[pipeline_name] = pipeline_def.run_protected(
+            verdict = pipeline_def.run_protected(
                 device_type,
                 devices_str,
                 find_tolerances,
@@ -1462,6 +1479,18 @@ def main(
                 f"\n===== Finished {pipeline_name} ({duration}) =====",
                 flush=True,
             )
+            return pipeline_name, verdict
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    _run_single_pipeline, name, pdef
+                ): name
+                for name, pdef in pipelines_to_run.items()
+            }
+            for future in as_completed(futures):
+                pipeline_name, verdict = future.result()
+                verdicts[pipeline_name] = verdict
     else:
         # TODO: Temporarily allow to not specify the org name when running a
         # pipeline by name. This is because the bisection script does not
