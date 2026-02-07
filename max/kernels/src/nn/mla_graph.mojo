@@ -1404,15 +1404,15 @@ fn mla_decode_branch_bf16[
         w_uk.shape_known and w_uv.shape_known
     ), "w_uk and w_uv's shapes should be static"
     comptime assert (
-        w_uk.static_shape[2] == qk_nope_head_dim
-    ), "w_uk.static_shape[2] should be equal to qk_nope_head_dim"
-    comptime kv_latent_dim = w_uk.static_shape[1]
+        w_uk.static_shape[1] == qk_nope_head_dim
+    ), "w_uk.static_shape[1] should be equal to qk_nope_head_dim"
+    comptime kv_latent_dim = w_uk.static_shape[2]
     comptime assert (
-        w_uv.static_shape[2] == kv_latent_dim
-    ), "w_uv.static_shape[2] should be equal to kv_latent_dim"
+        w_uv.static_shape[1] == kv_latent_dim
+    ), "w_uv.static_shape[1] should be equal to kv_latent_dim"
     comptime assert (
-        w_uv.static_shape[1] == v_head_dim
-    ), "w_uv.static_shape[1] should be equal to v_head_dim"
+        w_uv.static_shape[2] == v_head_dim
+    ), "w_uv.static_shape[2] should be equal to v_head_dim"
 
     var seq_len = Int(q.dim(0))
     if seq_len == 0:
@@ -1488,7 +1488,7 @@ fn mla_decode_branch_bf16[
         ),
     )
 
-    _batched_matmul_gpu[transpose_b=True](
+    _batched_matmul_gpu[transpose_b=False](
         mla_decode_input_nope, q_nope_t, w_uk, ctx
     )
 
@@ -1536,7 +1536,7 @@ fn mla_decode_branch_bf16[
         ),
     )
 
-    _batched_matmul_gpu[transpose_b=True](output_t, raw_output_t, w_uv, ctx)
+    _batched_matmul_gpu[transpose_b=False](output_t, raw_output_t, w_uv, ctx)
 
 
 # ===-----------------------------------------------------------------------===#
