@@ -239,13 +239,12 @@ def generate_llm_logits(
         num_steps = NUM_STEPS
 
     evaluation_batch_size: int | list[int]
-    if max_batch_size is None:
-        if pipeline_oracle.default_batch_size is None:
-            evaluation_batch_size = len(inputs)
-        else:
-            evaluation_batch_size = pipeline_oracle.default_batch_size
-    else:
+    if max_batch_size is not None:
         evaluation_batch_size = max_batch_size
+    elif pipeline_oracle.default_batch_size is not None:
+        evaluation_batch_size = pipeline_oracle.default_batch_size
+    else:
+        evaluation_batch_size = len(inputs)
 
     title = f"{pipeline_name} - {framework_name.upper()} - {encoding_name or 'Default Encoding'}"
     with github_log_group(title):
@@ -258,11 +257,9 @@ def generate_llm_logits(
                 max_encoding_name = encoding_name
 
             with maybe_log_hf_downloads(log_hf_downloads):
-                max_pipeline_and_tokenizer = (
-                    pipeline_oracle.create_max_pipeline(
-                        encoding=max_encoding_name,
-                        device_specs=device_specs,
-                    )
+                max_pipeline_and_tokenizer = pipeline_oracle.create_max_pipeline(
+                    encoding=max_encoding_name,
+                    device_specs=device_specs,
                 )
 
             print(f"Running {pipeline_name} model on MAX")
@@ -281,11 +278,9 @@ def generate_llm_logits(
             device: Any = "auto" if len(device_specs) > 1 else torch_device
 
             with maybe_log_hf_downloads(log_hf_downloads):
-                torch_pipeline_and_tokenizer = (
-                    pipeline_oracle.create_torch_pipeline(
-                        encoding=encoding_name,
-                        device=device,
-                    )
+                torch_pipeline_and_tokenizer = pipeline_oracle.create_torch_pipeline(
+                    encoding=encoding_name,
+                    device=device,
                 )
 
             print(f"Running {pipeline_name} model on Torch")

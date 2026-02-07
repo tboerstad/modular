@@ -228,8 +228,7 @@ def run_model(
         )
         outputs = pipeline.generate(batch)
         if print_outputs:
-            for j in range(len(batch)):
-                request = requests_in_batch[j]
+            for request, output in zip(requests_in_batch, outputs):
                 prompt = request.prompt
                 print(
                     "Prompt:",
@@ -240,14 +239,14 @@ def run_model(
                 print(
                     "Output:",
                     tokenizer.delegate.decode(
-                        outputs[j].tokens, skip_special_tokens=True
+                        output.tokens, skip_special_tokens=True
                     ),
                 )
 
-    results: list[dict[str, Any]] = []
-    for req_id, values in stored_logits.values.items():
-        results.append({"prompt": prompts_by_id[req_id], "values": values})
-    return results
+    return [
+        {"prompt": prompts_by_id[req_id], "values": values}
+        for req_id, values in stored_logits.values.items()
+    ]
 
 
 class StoreLogits:
