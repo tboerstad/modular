@@ -136,13 +136,36 @@ def run_text_generation_with_custom_image_processing(  # noqa: ANN201
     generate_logprobs: bool = False,
 ):
     """Run text generation with custom request processing for specialized models."""
+    requests_list = list(textgen_requests)
+    all_kwargs = [request_processor_fn(r) for r in requests_list]
+
+    # Batch text-only requests into a single model.generate() call.
+    # Requests with extra keys (e.g. pixel_values for images) fall back to
+    # serial processing since their tensors can't easily be stacked.
+    batchable = len(requests_list) > 1 and all(
+        set(kw.keys()) == {"input_ids", "attention_mask"} for kw in all_kwargs
+    )
+
+    if batchable:
+        return _run_batched_text_generation(
+            model=model,
+            data_processor=data_processor,
+            device=device,
+            requests=requests_list,
+            all_kwargs=all_kwargs,
+            num_steps=num_steps,
+            print_outputs=print_outputs,
+            use_cache=use_cache,
+            generate_logprobs=generate_logprobs,
+        )
+
+    # Serial fallback.
     saved_logits, store_logits = _create_logits_store(
         generate_logprobs=generate_logprobs
     )
     results = []
 
-    for request in textgen_requests:
-        generate_kwargs = request_processor_fn(request)
+    for request, generate_kwargs in zip(requests_list, all_kwargs):
         outputs = model.generate(
             **generate_kwargs,
             max_new_tokens=num_steps,
@@ -174,6 +197,108 @@ def run_text_generation_with_custom_image_processing(  # noqa: ANN201
         saved_logits.clear()
 
     return results
+
+
+def _run_batched_text_generation(  # noqa: ANN201
+    model: PreTrainedModel,
+    data_processor: PreTrainedTokenizer | PreTrainedTokenizerFast,
+    device: torch.device,
+    requests: list[MockTextGenerationRequest],
+    all_kwargs: list[dict[str, torch.Tensor]],
+    num_steps: int,
+    print_outputs: bool,
+    use_cache: bool | None = None,
+    generate_logprobs: bool = False,
+):
+    """Batch text-only requests into a single model.generate() call."""
+    batch_size = len(requests)
+    pad_token_id = getattr(data_processor, "pad_token_id", None)
+    if pad_token_id is None:
+        pad_token_id = getattr(data_processor, "eos_token_id", 0)
+
+    # Left-pad input_ids to the same length for batch generation.
+    all_input_ids = [kw["input_ids"].squeeze(0) for kw in all_kwargs]
+    max_len = max(ids.shape[0] for ids in all_input_ids)
+
+    padded_ids = []
+    padded_masks = []
+    for ids in all_input_ids:
+        pad_len = max_len - ids.shape[0]
+        if pad_len > 0:
+            padded_ids.append(
+                torch.cat([
+                    torch.full(
+                        (pad_len,), pad_token_id, dtype=ids.dtype, device=device
+                    ),
+                    ids,
+                ])
+            )
+            padded_masks.append(
+                torch.cat([
+                    torch.zeros(pad_len, dtype=torch.long, device=device),
+                    torch.ones(ids.shape[0], dtype=torch.long, device=device),
+                ])
+            )
+        else:
+            padded_ids.append(ids)
+            padded_masks.append(
+                torch.ones(ids.shape[0], dtype=torch.long, device=device)
+            )
+
+    batched_input_ids = torch.stack(padded_ids)
+    batched_attention_mask = torch.stack(padded_masks)
+
+    # Per-request logit storage.
+    saved_logits: list[list[dict]] = [[] for _ in range(batch_size)]
+
+    def store_logits(
+        input_ids: torch.LongTensor, scores: torch.FloatTensor
+    ) -> torch.FloatTensor:
+        for i in range(scores.shape[0]):
+            scores_np = scores[i].cpu().detach().numpy()
+            next_token = scores_np.argmax(axis=-1)
+            entry = {
+                "next_token": next_token,
+                "next_token_logits": scores_np[next_token],
+                "logits": scores_np,
+            }
+            if generate_logprobs:
+                scores_logprobs = log_softmax(scores_np)
+                entry["next_token_logprobs"] = float(
+                    scores_logprobs[next_token]
+                )
+                entry["logprobs"] = scores_logprobs
+            saved_logits[i].append(entry)
+        return scores
+
+    outputs = model.generate(
+        input_ids=batched_input_ids,
+        attention_mask=batched_attention_mask,
+        max_new_tokens=num_steps,
+        do_sample=False,
+        logits_processor=LogitsProcessorList([store_logits]),
+        num_return_sequences=1,
+        pad_token_id=pad_token_id,
+        **({"use_cache": use_cache} if use_cache is not None else {}),
+    )
+
+    if print_outputs:
+        decoded = data_processor.batch_decode(
+            outputs, skip_special_tokens=True
+        )
+        for request, output_text in zip(requests, decoded):
+            print(
+                "Prompt:",
+                f"{request.prompt[:100]}...{request.prompt[-100:]}"
+                if len(request.prompt) > 200
+                else request.prompt,
+            )
+            print("Output:", output_text)
+
+    return [
+        {"prompt": request.prompt, "values": saved_logits[i]}
+        for i, request in enumerate(requests)
+    ]
 
 
 def run_embeddings_generation(  # noqa: ANN201
