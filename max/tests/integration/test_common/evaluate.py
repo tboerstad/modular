@@ -134,7 +134,13 @@ def _create_batches(
                 "The sum of the batch sizes must be equal to the number of requests."
             )
     else:
-        batch_sizes = [batch_sizes] * len(requests)
+        # Create batches of up to batch_sizes items each.
+        chunk = batch_sizes
+        batch_sizes = []
+        remaining = len(requests)
+        while remaining > 0:
+            batch_sizes.append(min(chunk, remaining))
+            remaining -= chunk
     batches = []
 
     start = 0

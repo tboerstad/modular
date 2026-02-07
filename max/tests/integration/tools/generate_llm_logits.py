@@ -241,7 +241,7 @@ def generate_llm_logits(
     evaluation_batch_size: int | list[int]
     if max_batch_size is None:
         if pipeline_oracle.default_batch_size is None:
-            evaluation_batch_size = 1
+            evaluation_batch_size = len(inputs)
         else:
             evaluation_batch_size = pipeline_oracle.default_batch_size
     else:
