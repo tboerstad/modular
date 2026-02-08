@@ -342,19 +342,18 @@ def dump_results(
             )
 
 
-@dataclass
+@dataclass(frozen=True)
 class TagFilter:
     """User-provided filters on a tag list."""
 
-    must_have: Sequence[str] = field(default_factory=list)
-    must_not_have: Sequence[str] = field(default_factory=list)
+    must_have: frozenset[str] = field(default_factory=frozenset)
+    must_not_have: frozenset[str] = field(default_factory=frozenset)
 
     def satisfied_by(self, tags: Sequence[str]) -> bool:
         """Determines if this filter is satisfied by a tag list."""
-        if not all(required_tag in tags for required_tag in self.must_have):
-            return False
-        return not any(
-            forbidden_tag in tags for forbidden_tag in self.must_not_have
+        tag_set = set(tags)
+        return self.must_have <= tag_set and not (
+            self.must_not_have & tag_set
         )
 
 
@@ -374,10 +373,9 @@ class TagFilterParamType(click.ParamType):
         assert isinstance(value, str), f"Value of unexpected type {type(value)}"
         if not value:
             return TagFilter()
-        parts = value.split(",")
-        required = []
-        forbidden = []
-        for part in parts:
+        required: list[str] = []
+        forbidden: list[str] = []
+        for part in value.split(","):
             if part.startswith("+"):
                 required.append(part[1:])
             elif part.startswith("-"):
@@ -386,7 +384,10 @@ class TagFilterParamType(click.ParamType):
                 raise ValueError(
                     f"Tag filter part {part!r} does not start with '+' or '-'"
                 )
-        return TagFilter(must_have=required, must_not_have=forbidden)
+        return TagFilter(
+            must_have=frozenset(required),
+            must_not_have=frozenset(forbidden),
+        )
 
 
 @dataclass
