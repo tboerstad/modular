@@ -18,6 +18,8 @@ import python.runfiles
 
 # Use SmolLM-135M for fast testing
 MODEL_NAME = "HuggingFaceTB/SmolLM-135M"
+# Second small model (same LlamaForCausalLM architecture) for multi-model tests
+SECOND_MODEL_NAME = "HuggingFaceTB/SmolLM-360M"
 
 
 def _get_pipelines_binary() -> str:
@@ -201,3 +203,62 @@ def test_warm_cache_target_multiple_gpus() -> None:
     assert "Building and compiling model" in result.stderr, (
         "Model compilation did not start"
     )
+
+
+def test_warm_cache_multi_model_shared_arch() -> None:
+    """Test warm-cache with multiple models sharing the same architecture.
+
+    This test verifies that:
+    - The --additional-model flag is accepted and works
+    - Both models compile successfully
+    - Shared kernel information is logged (both use LlamaForCausalLM)
+    - Multi-model precompilation summary is displayed
+    """
+    pipelines_binary = _get_pipelines_binary()
+    result = subprocess.run(
+        [
+            pipelines_binary,
+            "warm-cache",
+            "--model",
+            MODEL_NAME,
+            "--additional-model",
+            SECOND_MODEL_NAME,
+            "--devices",
+            "gpu:0",
+            "--target",
+            "cuda:sm_80",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=360,  # 6 minutes for two models
+    )
+
+    # Verify successful exit
+    assert result.returncode == 0, (
+        f"Command failed with stderr:\n{result.stderr}"
+    )
+
+    # Verify multi-model precompilation was detected
+    assert "Multi-model precompilation" in result.stderr, (
+        "Multi-model precompilation header not found"
+    )
+
+    # Verify shared kernel info is logged (both models are LlamaForCausalLM)
+    assert "shared kernels" in result.stderr, (
+        "Shared kernel information not found"
+    )
+
+    # Verify both models were compiled
+    assert MODEL_NAME in result.stderr, "Primary model not found in output"
+    assert SECOND_MODEL_NAME in result.stderr, (
+        "Additional model not found in output"
+    )
+
+    # Verify compilation summary
+    assert "Multi-model precompilation complete" in result.stderr, (
+        "Completion summary not found"
+    )
+
+    # Verify both models were indexed
+    assert "[1/2]" in result.stderr, "First model index not found"
+    assert "[2/2]" in result.stderr, "Second model index not found"

@@ -455,8 +455,30 @@ def encode(prompt: str, num_warmups: int, **config_kwargs: Any) -> None:
         "without requiring physical hardware."
     ),
 )
-def cli_warm_cache(target: str | None, **config_kwargs) -> None:
-    """Load and compile the model to prepare caches."""
+@click.option(
+    "--additional-model",
+    multiple=True,
+    type=str,
+    help=(
+        "Additional model(s) to precompile alongside the primary model. "
+        "Can be specified multiple times. Models sharing the same architecture "
+        "benefit from shared kernel compilation, reducing total build time. "
+        "Example: --additional-model org/model-a --additional-model org/model-b"
+    ),
+)
+def cli_warm_cache(
+    target: str | None,
+    additional_model: tuple[str, ...],
+    **config_kwargs,
+) -> None:
+    """Load and compile the model(s) to prepare caches.
+
+    When additional models are specified with --additional-model, models that
+    share the same architecture benefit from shared kernel compilation. The
+    compilation engine caches compiled kernel objects, so models with the same
+    architecture compiled in the same session avoid redundant kernel
+    compilation.
+    """
     from max.pipelines import PIPELINE_REGISTRY, PipelineConfig
 
     # Log what we're doing if target mode is enabled
@@ -469,7 +491,13 @@ def cli_warm_cache(target: str | None, **config_kwargs) -> None:
         )
 
     pipeline_config = PipelineConfig(**config_kwargs)
-    _ = PIPELINE_REGISTRY.retrieve(pipeline_config)
+
+    if additional_model:
+        from max.pipelines.lib.warm_cache import precompile_models
+
+        precompile_models(pipeline_config, additional_model, config_kwargs)
+    else:
+        _ = PIPELINE_REGISTRY.retrieve(pipeline_config)
 
 
 @main.command(name="list")
