@@ -575,15 +575,13 @@ def calculate_logit_discrepancies(
             res_logits_float64, ref_logits_float64
         )
 
-        total_mae += mae
-        total_rmse += rmse
-        total_kl_div += kl_divergence_from_logits(
+        kl_div = kl_divergence_from_logits(
             res_logits_float64, ref_logits_float64
         )
-        max_kl_div = max(
-            max_kl_div,
-            kl_divergence_from_logits(res_logits_float64, ref_logits_float64),
-        )
+        total_mae += mae
+        total_rmse += rmse
+        total_kl_div += kl_div
+        max_kl_div = max(max_kl_div, kl_div)
         steps += 1
 
     mae_average = total_mae / steps
