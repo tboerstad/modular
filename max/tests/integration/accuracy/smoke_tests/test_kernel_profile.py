@@ -20,6 +20,7 @@ from unittest.mock import patch
 from smoke_tests.smoke_test import (
     KernelHit,
     KernelProfile,
+    _lookup_kernel_source,
     build_kernel_profile,
     parse_kernel_hits,
     write_kernel_profile,
@@ -39,6 +40,24 @@ INFO: Loading model weights...
 some random server log line
 [OP] LAUNCH rms_norm [id=4] target=gpu:0
 [OP] COMPLETE rms_norm [id=4] target=gpu:0
+""".strip()
+
+# Realistic LLM inference stderr with low-level GPU kernel names
+SAMPLE_LLM_STDERR = """\
+[OP] LAUNCH flash_attention [id=0] q=1x32x128;k=1x32x2048x128;v=1x32x2048x128;output=1x32x128
+[OP] COMPLETE flash_attention [id=0] q=1x32x128;k=1x32x2048x128;v=1x32x2048x128;output=1x32x128
+[OP] LAUNCH flare_mla_decoding [id=1] q=1x128x192;output=1x128x192
+[OP] COMPLETE flare_mla_decoding [id=1] q=1x128x192;output=1x128x192
+[OP] LAUNCH rms_norm_fused_residual_add [id=2] target=gpu:0
+[OP] COMPLETE rms_norm_fused_residual_add [id=2] target=gpu:0
+[OP] LAUNCH _cublasLt_matmul [id=3]
+[OP] COMPLETE _cublasLt_matmul [id=3]
+[OP] LAUNCH ep.fused_silu.fp8 [id=4]
+[OP] COMPLETE ep.fused_silu.fp8 [id=4]
+[OP] LAUNCH mo.moe.create_indices [id=5]
+[OP] COMPLETE mo.moe.create_indices [id=5]
+[OP] LAUNCH mo.mla.graph.prefill.decode.paged [id=6]
+[OP] COMPLETE mo.mla.graph.prefill.decode.paged [id=6]
 """.strip()
 
 
@@ -124,6 +143,69 @@ def test_build_kernel_profile_detail_parsing() -> None:
     assert entry["transpose_b"] == "true"
 
 
+def test_build_kernel_profile_includes_source() -> None:
+    """Verify that source mapping is included for known kernels."""
+    hits = [
+        KernelHit(kernel="flash_attention", detail="q=1x32x128"),
+        KernelHit(kernel="flare_mla_decoding", detail="q=1x128x192"),
+        KernelHit(kernel="rms_norm", detail=""),
+        KernelHit(kernel="_cublasLt_matmul", detail=""),
+        KernelHit(kernel="ep.fused_silu.fp8", detail=""),
+        KernelHit(kernel="unknown_kernel_xyz", detail=""),
+    ]
+    with patch(
+        "smoke_tests.smoke_test.get_gpu_name_and_count",
+        return_value=("H100", 1),
+    ):
+        profile = build_kernel_profile("test/model", hits)
+
+    by_name = {e["kernel"]: e for e in profile.kernels}
+
+    assert "mha.mojo" in by_name["flash_attention"]["source"]
+    assert "mla.mojo" in by_name["flare_mla_decoding"]["source"]
+    assert "normalization.mojo" in by_name["rms_norm"]["source"]
+    assert "cuBLASLt" in by_name["_cublasLt_matmul"]["source"]
+    assert "ep_api.mojo" in by_name["ep.fused_silu.fp8"]["source"]
+    # Unknown kernels should have no source key
+    assert "source" not in by_name["unknown_kernel_xyz"]
+
+
+def test_lookup_kernel_source_prefix_matching() -> None:
+    """Verify prefix matching picks the longest match."""
+    # Exact match
+    assert _lookup_kernel_source("flash_attention") is not None
+    assert "mha.mojo" in _lookup_kernel_source("flash_attention")
+
+    # Prefix match: "flash_attention_split_kv" should match that entry first
+    src = _lookup_kernel_source("flash_attention_split_kv")
+    assert src is not None
+    assert "flash_attention.mojo" in src
+
+    # mo.mla.graph.prefill.decode.paged should match before mo.mla.graph.prefill.paged
+    src = _lookup_kernel_source("mo.mla.graph.prefill.decode.paged")
+    assert src is not None
+    assert "mla_graph" in src
+
+    # Unknown kernel
+    assert _lookup_kernel_source("totally_unknown_kernel") is None
+
+
+def test_parse_llm_kernels() -> None:
+    """Test parsing of realistic LLM inference kernel traces."""
+    lines = SAMPLE_LLM_STDERR.splitlines()
+    hits = parse_kernel_hits(lines)
+
+    assert len(hits) == 7
+    kernel_names = [h.kernel for h in hits]
+    assert "flash_attention" in kernel_names
+    assert "flare_mla_decoding" in kernel_names
+    assert "rms_norm_fused_residual_add" in kernel_names
+    assert "_cublasLt_matmul" in kernel_names
+    assert "ep.fused_silu.fp8" in kernel_names
+    assert "mo.moe.create_indices" in kernel_names
+    assert "mo.mla.graph.prefill.decode.paged" in kernel_names
+
+
 def test_write_kernel_profile_json() -> None:
     profile = KernelProfile(
         model="test/model",
@@ -132,8 +214,8 @@ def test_write_kernel_profile_json() -> None:
         total_kernel_launches=3,
         unique_kernels=2,
         kernels=[
-            {"kernel": "matmul(mo.matmul)", "count": 2, "detail": "shapes"},
-            {"kernel": "elementwise(mo.add)", "count": 1},
+            {"kernel": "matmul(mo.matmul)", "count": 2, "source": "linalg/matmul/__init__.mojo", "detail": "shapes"},
+            {"kernel": "elementwise(mo.add)", "count": 1, "source": "algorithm/functional.mojo"},
         ],
     )
 
@@ -146,3 +228,4 @@ def test_write_kernel_profile_json() -> None:
         assert data["total_kernel_launches"] == 3
         assert len(data["kernels"]) == 2
         assert data["kernels"][0]["kernel"] == "matmul(mo.matmul)"
+        assert data["kernels"][0]["source"] == "linalg/matmul/__init__.mojo"

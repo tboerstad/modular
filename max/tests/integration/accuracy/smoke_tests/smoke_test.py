@@ -79,6 +79,91 @@ _OP_LAUNCH_RE = re.compile(
     r"\[OP\]\s+LAUNCH\s+(?P<kernel>\S+)\s+\[id=\d+\]\s*(?P<detail>.*)"
 )
 
+# Maps trace names emitted by Trace[TraceLevel.OP] to the Mojo source file
+# containing the GPU/CPU kernel implementation.  Prefix-matched so that e.g.
+# "mo.mla.decode.ragged.paged" matches "mo.mla.decode.ragged".
+# Ordered longest-prefix-first so the first match wins.
+_KERNEL_SOURCE_MAP: list[tuple[str, str]] = [
+    # ---- MLA (Multi-Latent Attention) ----
+    ("flare_mla_decoding", "nn/mla.mojo -> mla_decoding()"),
+    ("flare_mla_prefill", "nn/mla.mojo -> mla_prefill()"),
+    ("mo.mla.graph.prefill.decode.bf16.paged", "nn/mla_graph.mojo"),
+    ("mo.mla.graph.prefill.decode.paged", "nn/mla_graph.mojo"),
+    ("mo.mla.graph.prefill.paged", "nn/mla_graph.mojo"),
+    ("mo.mla.graph.decode.paged", "nn/mla_graph.mojo"),
+    ("mo.mla.decode.ragged", "nn/kv_cache_ragged.mojo -> generic_flare_mla_decode_kv_cache_ragged()"),
+    ("mo.mla.prefill.ragged.paged.plan", "nn/kv_cache_ragged.mojo -> generic_flare_mla_prefill_ragged_paged_plan()"),
+    ("mo.mla.prefill.ragged", "nn/kv_cache_ragged.mojo -> generic_flare_mla_prefill_kv_cache_ragged()"),
+    ("mo.mla.decompress.k.cache", "nn/kv_cache_ragged.mojo -> generic_flare_mla_decompress_k_cache_ragged_paged()"),
+    # ---- Flash Attention / MHA ----
+    ("flash_attention_split_kv", "nn/flash_attention.mojo -> flash_attention_split_kv()"),
+    ("flash_attention", "nn/mha.mojo -> flash_attention() [SM90: mha_sm90.mojo, SM100: mha_sm100_2q/1q.mojo]"),
+    ("mo.mha.padded.continuous_batching", "nn/kv_cache.mojo"),
+    ("mo.mha.padded", "nn/kv_cache.mojo"),
+    ("mo.mha.ragged.paged", "nn/kv_cache_ragged.mojo"),
+    ("mo.cross_attention.ragged", "nn/kv_cache_ragged.mojo"),
+    # ---- Matmul / GEMM ----
+    ("matmul", "linalg/matmul/__init__.mojo [SM100: gpu/sm100_structured/, SM90: gpu/sm90/, AMD: gpu/amd/]"),
+    ("batched_matmul_via_matmul", "linalg/bmm.mojo"),
+    ("batched_matmul", "linalg/bmm.mojo"),
+    ("swish_glu", "linalg/dual_gemm.mojo"),
+    ("_cublasLt_matmul", "linalg/matmul/vendor/blas.mojo (cuBLASLt)"),
+    ("_cublas_matmul", "linalg/matmul/vendor/blas.mojo (cuBLAS)"),
+    ("_hipblasLt_matmul", "linalg/matmul/vendor/blas.mojo (hipBLASLt)"),
+    ("_rocblas_matmul", "linalg/matmul/vendor/blas.mojo (rocBLAS)"),
+    ("mo.grouped.matmul", "MOGGKernelAPI.mojo -> grouped matmul"),
+    ("mo.matmul.dynamic.block.scaled", "MOGGKernelAPI.mojo -> block-scaled matmul"),
+    ("mo.matmul_dynamic_scaled_fp8", "MOGGKernelAPI.mojo -> FP8 scaled matmul"),
+    ("mo.matmul_static_scaled_float8", "MOGGKernelAPI.mojo -> static FP8 matmul"),
+    ("mo.kv_matmul.ragged.paged", "nn/kv_cache_ragged.mojo"),
+    ("mo.k_matmul.ragged.paged", "nn/kv_cache_ragged.mojo"),
+    # ---- Quantization ----
+    ("quantize_dynamic_scaled_fp8", "linalg/fp8_quantization.mojo"),
+    # ---- Normalization ----
+    ("rms_norm_fused_residual_add", "nn/normalization.mojo -> rms_norm_fused_residual_add()"),
+    ("rms_norm_fused_fp8", "nn/normalization.mojo -> rms_norm_fused_fp8()"),
+    ("rms_norm_kv_cache_ragged_paged", "nn/kv_cache.mojo"),
+    ("rms_norm", "nn/normalization.mojo -> rms_norm()"),
+    ("layer_norm", "nn/normalization.mojo -> layer_norm()"),
+    ("group_norm", "nn/normalization.mojo -> group_norm()"),
+    # ---- KV Cache ----
+    ("kv-cache-2m-iadd", "nn/kv_cache_ragged.mojo"),
+    ("mo.fused_qkv_matmul", "nn/kv_cache.mojo + nn/kv_cache_ragged.mojo"),
+    ("mo.fused_qk_rope", "nn/kv_cache.mojo + nn/kv_cache_ragged.mojo"),
+    ("mo.rope.ragged", "MOGGKernelAPI.mojo -> rope_ragged()"),
+    ("mo.kv_cache", "MOGGKernelAPI.mojo"),
+    # ---- Expert Parallelism / MoE ----
+    ("ep.fused_silu.nvfp4", "Mogg/MOGGKernelAPI/ep_api.mojo"),
+    ("ep.fused_silu.fp8", "Mogg/MOGGKernelAPI/ep_api.mojo"),
+    ("ep.fused_silu", "Mogg/MOGGKernelAPI/ep_api.mojo"),
+    ("ep.dispatch_async", "shmem/ep.mojo"),
+    ("ep.dispatch_wait", "shmem/ep.mojo"),
+    ("ep.dispatch", "shmem/ep.mojo"),
+    ("ep.combine_wait", "shmem/ep.mojo"),
+    ("ep.combine", "shmem/ep.mojo"),
+    ("mo.moe.create_indices", "nn/moe.mojo"),
+    ("mo.moe.router_group_limited", "nn/moe.mojo"),
+    # ---- Elementwise (via algorithm.functional.elementwise) ----
+    ("elementwise", "algorithm/functional.mojo -> elementwise() [wraps MOGGKernelAPI ops]"),
+    # ---- Other ops ----
+    ("softmax", "nn/softmax.mojo"),
+    ("conv_transposed", "nn/conv_transpose.mojo"),
+    ("conv", "nn/conv.mojo"),
+    ("gather", "nn/gather_scatter.mojo"),
+    ("concat", "nn/concat.mojo"),
+    ("argsort", "nn/argsort.mojo"),
+    ("arg_nonzero", "nn/arg_nonzero.mojo"),
+    ("sliced-add", "MOGGKernelAPI.mojo"),
+]
+
+
+def _lookup_kernel_source(trace_name: str) -> str | None:
+    """Look up the Mojo source file for a kernel trace name (prefix match)."""
+    for prefix, source in _KERNEL_SOURCE_MAP:
+        if trace_name.startswith(prefix):
+            return source
+    return None
+
 
 @dataclass
 class KernelHit:
@@ -133,10 +218,14 @@ def build_kernel_profile(
 
     kernels = []
     for key, count in counter.most_common():
+        kernel_name = kernel_name_map[key]
         entry: dict[str, Any] = {
-            "kernel": kernel_name_map[key],
+            "kernel": kernel_name,
             "count": count,
         }
+        source = _lookup_kernel_source(kernel_name)
+        if source:
+            entry["source"] = source
         detail = detail_map[key]
         if detail:
             entry["detail"] = detail
@@ -671,9 +760,9 @@ def smoke_test(
             f"{profile.unique_kernels} unique kernels"
         )
         for entry in profile.kernels[:20]:
+            src = f"  [{entry['source']}]" if entry.get("source") else ""
             logger.info(
-                f"  {entry['count']:>5}x  {entry['kernel']}"
-                + (f"  ({entry.get('detail', '')})" if entry.get("detail") else "")
+                f"  {entry['count']:>5}x  {entry['kernel']}{src}"
             )
         if len(profile.kernels) > 20:
             logger.info(f"  ... and {len(profile.kernels) - 20} more (see {fp})")
