@@ -78,6 +78,7 @@ from .tokenizer import (
     max_tokens_to_generate,
 )
 from .utils import CompilationTimer, upper_bounded_default
+from .warm_cache import precompile_models
 from .weight_path_parser import WeightPathParser
 
 __all__ = [
@@ -130,6 +131,7 @@ __all__ = [
     "get_default_max_config_file_section_name",
     "max_tokens_to_generate",
     "parse_float8_config",
+    "precompile_models",
     "rejection_sampler",
     "rejection_sampler_with_residuals",
     "resolve_max_config_inheritance",
