@@ -582,10 +582,10 @@ class PipelineDef:
         try:
             with detect_infra_errors():
                 return self.run(
-                    device_type,
-                    devices,
-                    find_tolerances,
-                    print_suggested_tolerances,
+                    device_type=device_type,
+                    devices=devices,
+                    find_tolerances=find_tolerances,
+                    print_suggested_tolerances=print_suggested_tolerances,
                 )
         except Flake:
             return VerificationVerdict(status=VerificationStatus.FLAKE)
@@ -597,7 +597,6 @@ class PipelineDef:
             return VerificationVerdict(status=VerificationStatus.ERROR)
 
 
-# Helper function to create pipeline runner
 def _make_pipeline_runner(
     *,
     pipeline: str,
@@ -609,9 +608,8 @@ def _make_pipeline_runner(
     kl_div_threshold: float | None = None,
     timeout: int | None = None,
 ) -> Callable[[DeviceKind, str, bool, bool], VerificationVerdict]:
-    """
-    Build and return a small closure that executes `run_llm_verification`
-    for a single model configuration.
+    """Build a callable that executes `run_llm_verification` for a single
+    model configuration.
 
     Args:
         pipeline: Name of the model / pipeline to verify.
@@ -628,26 +626,19 @@ def _make_pipeline_runner(
         timeout: Timeout in seconds for the verification.
 
     Returns:
-        A callable that runs the verification and yields a `VerificationVerdict`.
+        A callable that runs the verification and returns a
+        ``VerificationVerdict``.
     """
-    return (
-        lambda device_type,
-        devices,
-        find_tolerances,
-        print_suggested_tolerances: run_llm_verification(
-            device_type=device_type,
-            devices=devices,
-            find_tolerances=find_tolerances,
-            print_suggested_tolerances=print_suggested_tolerances,
-            pipeline=pipeline,
-            encoding=encoding,
-            pregenerated_torch_goldens=pregenerated_torch_goldens,
-            absolute_tolerance=absolute_tolerance,
-            relative_tolerance=relative_tolerance,
-            cos_dist_threshold=cos_dist_threshold,
-            kl_div_threshold=kl_div_threshold,
-            timeout=timeout,
-        )
+    return functools.partial(
+        run_llm_verification,
+        pipeline=pipeline,
+        encoding=encoding,
+        pregenerated_torch_goldens=pregenerated_torch_goldens,
+        absolute_tolerance=absolute_tolerance,
+        relative_tolerance=relative_tolerance,
+        cos_dist_threshold=cos_dist_threshold,
+        kl_div_threshold=kl_div_threshold,
+        timeout=timeout,
     )
 
 
