@@ -17,9 +17,10 @@ For example, to precompile a single model:
       --model google/gemma-3-12b-it
 
 To precompile multiple models in a single invocation, use ``--additional-model``.
-Models that share the same architecture (e.g., two Llama variants) benefit from
-shared kernel compilation -- the compilation engine caches compiled kernel objects
-so redundant work is avoided:
+The compilation engine's internal kernel cache automatically shares compiled kernel
+objects between models -- both within the same architecture (e.g., two Llama
+variants share 100% of kernels) and across different architectures that use common
+operations (e.g., matmul, attention, normalization):
 
 .. code-block:: bash
 

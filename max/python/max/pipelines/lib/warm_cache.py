@@ -13,14 +13,15 @@
 
 """Multi-model precompilation with shared kernel optimization.
 
-When multiple models are compiled together, they can share compiled kernel
-objects through the compilation engine's internal cache. This applies not just
-to models with the same architecture, but also across different architectures
-that use common kernel types (matmul, attention, normalization, etc.).
+When multiple models are compiled in the same process, the compilation engine's
+internal kernel cache automatically shares compiled kernel objects between them.
+This applies both within the same architecture (full sharing of identical
+operation graphs) and across different architectures that use common operations
+(e.g., matmul, attention, normalization).
 
-For example, a Llama model and a Gemma model both use attention, matmul, and
-normalization kernels. Compiling them in the same session allows the second
-model to reuse kernel compilations from the first.
+Models with the same architecture are grouped together during compilation to
+maximize cache reuse, since identical architectures produce identical operation
+graphs and therefore achieve 100% kernel reuse.
 """
 
 from __future__ import annotations
@@ -36,75 +37,6 @@ from .registry import PIPELINE_REGISTRY
 
 logger = logging.getLogger("max.pipelines")
 
-# ---------------------------------------------------------------------------
-# Kernel category classification
-# ---------------------------------------------------------------------------
-# Every compiled model is built from a set of kernel types (matmul, attention,
-# normalization, …).  Two models that share a kernel *category* will reuse the
-# same compiled kernel objects when they target the same device and dtype,
-# regardless of whether they belong to the same architecture.
-
-_TRANSFORMER_DECODER_KERNELS = frozenset(
-    {
-        "matmul",
-        "attention",
-        "normalization",
-        "activation",
-        "embedding",
-        "rope",
-        "kv_cache",
-        "sampling",
-        "softmax",
-    }
-)
-
-_TRANSFORMER_ENCODER_KERNELS = frozenset(
-    {
-        "matmul",
-        "attention",
-        "normalization",
-        "activation",
-        "embedding",
-        "softmax",
-        "pooling",
-    }
-)
-
-_DIFFUSION_KERNELS = frozenset(
-    {
-        "matmul",
-        "normalization",
-        "activation",
-        "convolution",
-        "attention",
-        "embedding",
-    }
-)
-
-_ENCODER_ARCH_PATTERNS = ("Bert", "MPNet", "Roberta", "Albert", "XLM")
-_DIFFUSION_ARCH_PATTERNS = ("Flux", "StableDiffusion", "UNet")
-
-
-def _get_kernel_categories(arch_name: str | None) -> frozenset[str]:
-    """Determine the kernel categories an architecture uses.
-
-    This is a heuristic based on the architecture name.  All transformer-based
-    architectures share core kernel types (matmul, attention, normalization).
-    """
-    if not arch_name or arch_name == "unknown":
-        return frozenset()
-
-    for pattern in _DIFFUSION_ARCH_PATTERNS:
-        if pattern in arch_name:
-            return _DIFFUSION_KERNELS
-
-    for pattern in _ENCODER_ARCH_PATTERNS:
-        if pattern in arch_name:
-            return _TRANSFORMER_ENCODER_KERNELS
-
-    # Default: transformer decoder (causal LM) — the most common case.
-    return _TRANSFORMER_DECODER_KERNELS
-
 
 # ---------------------------------------------------------------------------
 # ModelInfo
@@ -118,7 +50,6 @@ class ModelInfo:
     model_path: str
     config: PipelineConfig
     arch_name: str
-    kernel_categories: frozenset[str]
 
 
 # ---------------------------------------------------------------------------
@@ -133,13 +64,13 @@ def precompile_models(
 ) -> None:
     """Precompile multiple models, taking advantage of shared kernels.
 
-    Models are analysed for kernel sharing potential — both within the same
-    architecture (full sharing) and across different architectures (partial
-    sharing of common kernel types like matmul, attention, normalization).
+    The compilation engine caches compiled kernel objects internally, so
+    compiling models in the same process avoids redundant kernel compilation.
+    This works both within the same architecture (identical operation graphs)
+    and across architectures that share common operations.
 
-    The compilation engine caches compiled kernel objects, so compiling models
-    together in the same process avoids redundant kernel compilation regardless
-    of whether models share the same architecture.
+    Models are grouped by architecture so that identical architectures are
+    compiled adjacently, maximizing kernel cache hits.
 
     Args:
         primary_config: The fully resolved PipelineConfig for the primary model.
@@ -152,7 +83,7 @@ def precompile_models(
     )
 
     model_infos = _build_model_infos(all_configs)
-    _log_shared_kernel_info(model_infos)
+    _log_compilation_plan(model_infos)
 
     ordered = _order_for_max_sharing(model_infos)
     _compile_models(ordered)
@@ -201,7 +132,7 @@ def _build_all_configs(
 def _build_model_infos(
     configs: list[tuple[str, PipelineConfig]],
 ) -> list[ModelInfo]:
-    """Build ModelInfo for each model, including kernel analysis."""
+    """Build ModelInfo for each model, resolving the architecture name."""
     infos: list[ModelInfo] = []
     for model_path, config in configs:
         arch = PIPELINE_REGISTRY.retrieve_architecture(
@@ -209,13 +140,11 @@ def _build_model_infos(
             use_legacy_module=config.use_legacy_module,
         )
         arch_name = arch.name if arch else "unknown"
-        kernel_categories = _get_kernel_categories(arch_name)
         infos.append(
             ModelInfo(
                 model_path=model_path,
                 config=config,
                 arch_name=arch_name,
-                kernel_categories=kernel_categories,
             )
         )
     return infos
@@ -226,8 +155,8 @@ def _build_model_infos(
 # ---------------------------------------------------------------------------
 
 
-def _log_shared_kernel_info(model_infos: list[ModelInfo]) -> None:
-    """Log information about shared kernels between models."""
+def _log_compilation_plan(model_infos: list[ModelInfo]) -> None:
+    """Log the multi-model compilation plan."""
     total = len(model_infos)
 
     # Group by architecture for per-arch summary.
@@ -254,38 +183,12 @@ def _log_shared_kernel_info(model_infos: list[ModelInfo]) -> None:
         else:
             logger.info(f"  {arch_name}: {model_paths[0]}")
 
-    # Cross-architecture kernel sharing.
+    # Cross-architecture note.
     if len(arch_groups) > 1:
-        arch_names = list(arch_groups.keys())
         logger.info("")
-        logger.info("  Cross-architecture shared kernels:")
-        for i in range(len(arch_names)):
-            for j in range(i + 1, len(arch_names)):
-                a_cats = arch_groups[arch_names[i]][0].kernel_categories
-                b_cats = arch_groups[arch_names[j]][0].kernel_categories
-                shared = a_cats & b_cats
-                if shared:
-                    all_cats = a_cats | b_cats
-                    pct = len(shared) / len(all_cats) * 100 if all_cats else 0
-                    logger.info(
-                        f"    {arch_names[i]} <-> {arch_names[j]}: "
-                        f"{len(shared)} shared kernel types "
-                        f"({', '.join(sorted(shared))}) "
-                        f"[{pct:.0f}% overlap]"
-                    )
-
-        # Kernels common to every architecture in this batch.
-        all_arch_cats = [
-            infos[0].kernel_categories for infos in arch_groups.values()
-        ]
-        common_across_all = (
-            frozenset.intersection(*all_arch_cats) if all_arch_cats else frozenset()
+        logger.info(
+            "  Cross-architecture kernel sharing enabled via compiler cache"
         )
-        if common_across_all:
-            logger.info(
-                f"    All architectures share: "
-                f"{', '.join(sorted(common_across_all))}"
-            )
 
     logger.info("=" * 60)
     logger.info("")
@@ -299,15 +202,12 @@ def _log_shared_kernel_info(model_infos: list[ModelInfo]) -> None:
 def _order_for_max_sharing(model_infos: list[ModelInfo]) -> list[ModelInfo]:
     """Order models to maximise cumulative kernel cache hits.
 
-    Models with the most kernel categories are compiled first so their
-    kernels warm the cache for subsequent models.  Among models with the
-    same number of kernel categories, models with the same architecture
-    are grouped together (identical architecture = 100 % kernel reuse).
+    Models with the same architecture are grouped together so that identical
+    operation graphs achieve 100% kernel reuse.  The compiler's internal
+    cache handles cross-architecture sharing of common operations (e.g.,
+    matmul, attention, normalization) automatically.
     """
-    return sorted(
-        model_infos,
-        key=lambda info: (-len(info.kernel_categories), info.arch_name),
-    )
+    return sorted(model_infos, key=lambda info: info.arch_name)
 
 
 # ---------------------------------------------------------------------------
@@ -316,27 +216,27 @@ def _order_for_max_sharing(model_infos: list[ModelInfo]) -> list[ModelInfo]:
 
 
 def _compile_models(model_infos: list[ModelInfo]) -> None:
-    """Compile all models in the given order."""
+    """Compile all models in the given order.
+
+    The compilation engine's kernel cache is process-scoped, so compiling
+    multiple models in the same session shares compiled kernel objects
+    automatically — both within and across architectures.
+    """
     total_start = time.perf_counter()
     total = len(model_infos)
     compiled_count = 0
-
-    # Track which kernel categories have already been compiled.
-    compiled_kernel_categories: set[str] = set()
     prev_arch: str | None = None
 
     for info in model_infos:
         model_start = time.perf_counter()
         compiled_count += 1
 
-        # On architecture transitions, report expected kernel reuse.
+        # On architecture transitions, note cross-arch kernel reuse.
         if prev_arch is not None and info.arch_name != prev_arch:
-            reusable = info.kernel_categories & compiled_kernel_categories
-            if reusable:
-                logger.info(
-                    f"  Reusing {len(reusable)} compiled kernel types from "
-                    f"previous models: {', '.join(sorted(reusable))}"
-                )
+            logger.info(
+                "  Switching architecture — compiler cache provides "
+                "cross-architecture kernel reuse"
+            )
         prev_arch = info.arch_name
 
         logger.info(
@@ -347,7 +247,6 @@ def _compile_models(model_infos: list[ModelInfo]) -> None:
         try:
             _ = PIPELINE_REGISTRY.retrieve(info.config)
             elapsed = time.perf_counter() - model_start
-            compiled_kernel_categories |= info.kernel_categories
             logger.info(
                 f"[{compiled_count}/{total}] "
                 f"Compiled {info.model_path} in {elapsed:.1f}s"

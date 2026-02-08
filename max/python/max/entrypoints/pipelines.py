@@ -461,8 +461,10 @@ def encode(prompt: str, num_warmups: int, **config_kwargs: Any) -> None:
     type=str,
     help=(
         "Additional model(s) to precompile alongside the primary model. "
-        "Can be specified multiple times. Models sharing the same architecture "
-        "benefit from shared kernel compilation, reducing total build time. "
+        "Can be specified multiple times. The compilation engine's kernel cache "
+        "shares compiled kernel objects between models — both within the same "
+        "architecture and across different architectures that use common "
+        "operations. "
         "Example: --additional-model org/model-a --additional-model org/model-b"
     ),
 )
@@ -473,11 +475,11 @@ def cli_warm_cache(
 ) -> None:
     """Load and compile the model(s) to prepare caches.
 
-    When additional models are specified with --additional-model, models that
-    share the same architecture benefit from shared kernel compilation. The
-    compilation engine caches compiled kernel objects, so models with the same
-    architecture compiled in the same session avoid redundant kernel
-    compilation.
+    When additional models are specified with --additional-model, all models
+    are compiled in the same process. The compilation engine's internal kernel
+    cache automatically shares compiled kernel objects between models — both
+    within the same architecture (100% kernel reuse) and across different
+    architectures that use common operations.
     """
     from max.pipelines import PIPELINE_REGISTRY, PipelineConfig
 
