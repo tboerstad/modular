@@ -1,0 +1,95 @@
+##===----------------------------------------------------------------------===##
+# Copyright (c) 2026, Modular Inc. All rights reserved.
+#
+# Licensed under the Apache License v2.0 with LLVM Exceptions:
+# https://llvm.org/LICENSE.txt
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+##===----------------------------------------------------------------------===##
+
+name: Kernel Tracking
+
+on:
+  schedule:
+    # Run daily at 06:00 UTC.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      level:
+        description: "IR level to walk: 'mo' (high-level ops) or 'mogg' (selected kernels)"
+        required: false
+        default: "mo"
+        type: choice
+        options:
+          - mo
+          - mogg
+
+permissions:
+  contents: write      # push the report artifact
+  actions: read
+
+concurrency:
+  group: kernel-tracking
+  cancel-in-progress: true
+
+jobs:
+  track-kernels:
+    name: Track kernel hits across models
+    runs-on: large-oss-linux
+
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install MAX (nightly)
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install modular \
+            --extra-index-url https://whl.modular.com/nightly/simple/
+
+      - name: Run kernel tracker
+        run: |
+          source .venv/bin/activate
+          LEVEL="${{ github.event.inputs.level || 'mo' }}"
+          python -m max.tools.track_models \
+            --test-only \
+            --level "$LEVEL" \
+            -o kernel_report.json
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-report-${{ github.sha }}
+          path: kernel_report.json
+          retention-days: 90
+
+      - name: Append to tracking database
+        run: |
+          source .venv/bin/activate
+          mkdir -p .kernel-tracking
+
+          DB=".kernel-tracking/history.jsonl"
+          # Append today's report as a single JSONL line.
+          python3 -c "
+          import json, sys
+          with open('kernel_report.json') as f:
+              report = json.load(f)
+          # One line per run for easy appending.
+          print(json.dumps(report))
+          " >> "$DB"
+
+          echo "[kernel-tracking] appended to $DB ($(wc -l < "$DB") entries)"
