@@ -74,16 +74,13 @@ class VerificationStatus(str, enum.Enum):
 
     @property
     def emoji(self) -> str:
-        return _VERDICT_EMOJI[self]
-
-
-_VERDICT_EMOJI = {
-    VerificationStatus.OK: "✅",
-    VerificationStatus.INVALID: "🟡",
-    VerificationStatus.ERROR: "❌",
-    VerificationStatus.FLAKE: "❄️",
-    VerificationStatus.INFRA: "🧯",
-}
+        return {
+            VerificationStatus.OK: "✅",
+            VerificationStatus.INVALID: "🟡",
+            VerificationStatus.ERROR: "❌",
+            VerificationStatus.FLAKE: "❄️",
+            VerificationStatus.INFRA: "🧯",
+        }[self]
 
 
 @dataclass
