@@ -15,21 +15,11 @@ name: Kernel Tracking
 
 on:
   schedule:
-    # Run daily at 06:00 UTC.
     - cron: "0 6 * * *"
   workflow_dispatch:
-    inputs:
-      level:
-        description: "IR level to walk: 'mo' (high-level ops) or 'mogg' (selected kernels)"
-        required: false
-        default: "mo"
-        type: choice
-        options:
-          - mo
-          - mogg
 
 permissions:
-  contents: write      # push the report artifact
+  contents: read
   actions: read
 
 concurrency:
@@ -38,9 +28,8 @@ concurrency:
 
 jobs:
   track-kernels:
-    name: Track kernel hits across models
+    name: Track kernel hits
     runs-on: large-oss-linux
-
     defaults:
       run:
         shell: bash
@@ -48,12 +37,11 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Install MAX (nightly)
+      - name: Install MAX nightly
         run: |
           python3 -m venv .venv
           source .venv/bin/activate
@@ -64,32 +52,10 @@ jobs:
       - name: Run kernel tracker
         run: |
           source .venv/bin/activate
-          LEVEL="${{ github.event.inputs.level || 'mo' }}"
-          python -m max.tools.track_models \
-            --test-only \
-            --level "$LEVEL" \
-            -o kernel_report.json
+          python -m max.tools.kernel_tracker --test -o kernel_report.json
 
-      - name: Upload report artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: kernel-report-${{ github.sha }}
           path: kernel_report.json
           retention-days: 90
-
-      - name: Append to tracking database
-        run: |
-          source .venv/bin/activate
-          mkdir -p .kernel-tracking
-
-          DB=".kernel-tracking/history.jsonl"
-          # Append today's report as a single JSONL line.
-          python3 -c "
-          import json, sys
-          with open('kernel_report.json') as f:
-              report = json.load(f)
-          # One line per run for easy appending.
-          print(json.dumps(report))
-          " >> "$DB"
-
-          echo "[kernel-tracking] appended to $DB ($(wc -l < "$DB") entries)"
