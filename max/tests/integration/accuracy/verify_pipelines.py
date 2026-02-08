@@ -558,6 +558,12 @@ def run_llm_verification(
         return VerificationVerdict(status=VerificationStatus.ERROR)
 
 
+# Signature of the callable that runs a single pipeline verification.
+PipelineRunner = Callable[
+    [DeviceKind, str, bool, bool], VerificationVerdict
+]
+
+
 @dataclass
 class PipelineDef:
     """Definition of the requirements and method of running a pipeline.
@@ -569,7 +575,7 @@ class PipelineDef:
     """
 
     compatible_with: Sequence[DeviceKind]
-    run: Callable[[DeviceKind, str, bool, bool], VerificationVerdict]
+    run: PipelineRunner
     tags: Sequence[str] = field(default_factory=list)
 
     def run_protected(
@@ -607,7 +613,7 @@ def _make_pipeline_runner(
     cos_dist_threshold: float | None = None,
     kl_div_threshold: float | None = None,
     timeout: int | None = None,
-) -> Callable[[DeviceKind, str, bool, bool], VerificationVerdict]:
+) -> PipelineRunner:
     """Build a callable that executes `run_llm_verification` for a single
     model configuration.
 
