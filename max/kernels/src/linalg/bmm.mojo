@@ -20,6 +20,7 @@ from sys.info import (
     is_nvidia_gpu,
     simd_width_of,
 )
+from sys.param_env import env_get_bool
 from linalg.fp8_quantization import naive_blockwise_scaled_fp8_matmul
 from algorithm import sync_parallelize, vectorize
 from algorithm.functional import _get_start_indices_of_nth_subvolume_uint
@@ -1294,6 +1295,12 @@ fn bmm_sm100_blockwise_scaled_fp8[
     b_scales: LayoutTensor[b_scales_type, b_scales_layout, ...],
     ctx: DeviceContext,
 ) raises:
+    # [DETERMINISM FIX] Issue #38547: Add deterministic execution mode for B200.
+    # When B200_DETERMINISTIC_MODE=1 is set, batch operations are executed sequentially
+    # to ensure consistent floating-point operation ordering across runs.
+    # This prevents non-deterministic results when batch_size > 1 on B200 GPUs.
+    comptime b200_deterministic = env_get_bool["B200_DETERMINISTIC_MODE", False]()
+
     comptime assert transpose_b, "Only support transposed B"
 
     comptime assert (
@@ -1429,20 +1436,83 @@ fn bmm_sm100_blockwise_scaled_fp8[
         elementwise_lambda_fn=elementwise_lambda_fn,
     ]
 
-    ctx.enqueue_function[kernel, kernel](
-        a_tma_op,
-        b_tma_op,
-        c,
-        a_scales_tma_op,
-        b_scales,
-        UInt(ceildiv(K, BK)),
-        grid_dim=(ceildiv(N, BN), ceildiv(M, BM), batch_size),
-        block_dim=(block_dim),
-        shared_mem_bytes=smem_use,
-        func_attribute=FuncAttribute.MAX_DYNAMIC_SHARED_SIZE_BYTES(
-            UInt32(smem_use)
-        ),
-    )
+    # [DETERMINISM FIX] Issue #38547: When deterministic mode is enabled and batch_size > 1,
+    # process batches sequentially to ensure consistent floating-point operation ordering.
+    # This prevents the non-deterministic behavior observed on B200 GPUs caused by
+    # concurrent batch processing leading to varying floating-point accumulation order.
+    @parameter
+    if b200_deterministic and batch_size > 1:
+        # Sequential batch processing for deterministic results
+        logger.info("B200_DETERMINISTIC_MODE enabled: processing ", batch_size, " batches sequentially")
+        # Process each batch independently by launching kernels with single-batch grids
+        for batch_idx in range(batch_size):
+            # Create single-batch views for deterministic processing
+            # The kernel uses block_idx.z to index batches, so we offset the pointers
+            # and use grid_z=1 to process only this batch
+            var c_single_batch = LayoutTensor[c_type, c.layout, MutAnyOrigin](
+                c.ptr_at_offset(Index(batch_idx, 0, 0)),
+                c.layout,
+            )
+            var a_single_batch_tma = create_tensor_tile[
+                Index(1, BM, BK),
+                swizzle_mode=a_swizzle,
+                __tile_layout = Layout.row_major(1, BM, BK),
+            ](ctx, LayoutTensor[a_type, a.layout, MutAnyOrigin](
+                a.ptr_at_offset(Index(batch_idx, 0, 0)),
+                a.layout,
+            ))
+            var b_single_batch_tma = create_tensor_tile[
+                Index(1, BN, BK) if transpose_b else Index(1, BK, BN),
+                swizzle_mode=b_swizzle,
+                __tile_layout = Layout.row_major(1, BN, BK) if transpose_b else Layout.row_major(1, BK, BN),
+            ](ctx, LayoutTensor[b_type, b.layout, MutAnyOrigin](
+                b.ptr_at_offset(Index(batch_idx, 0, 0)),
+                b.layout,
+            ))
+            var a_scales_single_batch_tma = create_tensor_tile[
+                Index(1, 1, BM),
+                __tile_layout = Layout.row_major(1, 1, BM),
+                __desc_layout = Layout(IntTuple(1, 1, BM), IntTuple(1, 1, 1)),
+            ](ctx, LayoutTensor[a_scales_type, a_scales.layout, MutAnyOrigin](
+                a_scales.ptr_at_offset(Index(batch_idx, 0, 0)),
+                a_scales.layout,
+            ))
+            var b_scales_single_batch = LayoutTensor[b_scales_type, b_scales.layout, MutAnyOrigin](
+                b_scales.ptr + batch_idx * UInt(b_scales.dim(1)) * UInt(b_scales.dim(2)),
+                b_scales.layout,
+            )
+
+            ctx.enqueue_function[kernel, kernel](
+                a_single_batch_tma,
+                b_single_batch_tma,
+                c_single_batch,
+                a_scales_single_batch_tma,
+                b_scales_single_batch,
+                UInt(ceildiv(K, BK)),
+                grid_dim=(ceildiv(N, BN), ceildiv(M, BM), 1),  # Single batch per launch
+                block_dim=(block_dim),
+                shared_mem_bytes=smem_use,
+                func_attribute=FuncAttribute.MAX_DYNAMIC_SHARED_SIZE_BYTES(
+                    UInt32(smem_use)
+                ),
+            )
+            ctx.synchronize()  # Ensure this batch completes before starting next
+    else:
+        # Standard parallel batch processing (non-deterministic but faster)
+        ctx.enqueue_function[kernel, kernel](
+            a_tma_op,
+            b_tma_op,
+            c,
+            a_scales_tma_op,
+            b_scales,
+            UInt(ceildiv(K, BK)),
+            grid_dim=(ceildiv(N, BN), ceildiv(M, BM), batch_size),
+            block_dim=(block_dim),
+            shared_mem_bytes=smem_use,
+            func_attribute=FuncAttribute.MAX_DYNAMIC_SHARED_SIZE_BYTES(
+                UInt32(smem_use)
+            ),
+        )
 
 
 fn batched_matmul_dynamic_scaled_fp8_naive[
