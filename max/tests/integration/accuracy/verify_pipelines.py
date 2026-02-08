@@ -463,11 +463,10 @@ def run_llm_verification(
     kl_div_threshold: float | None = None,
     timeout: int | None = None,
 ) -> VerificationVerdict:
-    """Run a Llama3 verification with the given model and weights encoding.
+    """Run a logit-level verification of a MAX pipeline against a reference.
 
-    extra_verify_flags are passed to
-    max/tests/integration/architectures/llama3/verify.py -- check that script
-    for details on acceptable flags.
+    Generates logits from both a reference framework (Torch/vLLM) and MAX,
+    then compares them using the configured tolerance metrics.
     """
 
     fssafe_pipeline = pipeline.replace("/", "_")
