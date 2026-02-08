@@ -72,3 +72,21 @@ modular_py_test(
         requirement("click"),
     ],
 )
+
+modular_py_test(
+    name = "test_kernel_profile",
+    size = "small",
+    srcs = [
+        "conftest.py",
+        "test_kernel_profile.py",
+    ],
+    imports = [".."],
+    # TODO(MODELS-994): Investigate and enable on macOS
+    target_compatible_with = select({
+        "@platforms//os:macos": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":smoke_test",
+    ],
+)
