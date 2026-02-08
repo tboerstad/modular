@@ -46,7 +46,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 import click
 import numpy as np
@@ -278,22 +278,35 @@ def verify(
         VerificationResult containing pass/fail status and discrepancy report
     """
 
-    # MyPy needs the TypeVar in order to infer the type of the return value
-    T = TypeVar("T")
-
-    def val_or(value: T | None, default: T) -> T:
-        return value if value is not None else default
-
-    # Note: These default value shenanigans are here to simplify the logic
-    # of the caller in generate_llm_logits.py.
-    eval_metric = val_or(eval_metric, DEFAULT_EVAL_METRIC)
-    relative_tolerance = val_or(relative_tolerance, DEFAULT_RELATIVE_TOLERANCE)
-    absolute_tolerance = val_or(absolute_tolerance, DEFAULT_ABSOLUTE_TOLERANCE)
-    cos_dist_threshold = val_or(cos_dist_threshold, DEFAULT_COS_DIST_THRESHOLD)
-    kl_div_threshold = val_or(kl_div_threshold, DEFAULT_KL_DIV_THRESHOLD)
-    diff_count = val_or(diff_count, DEFAULT_DIFF_COUNT)
-    print_suggested_tolerances = val_or(
-        print_suggested_tolerances, DEFAULT_PRINT_SUGGESTED_TOLERANCES
+    # Apply defaults for any parameters left as None.  This allows callers
+    # (e.g. generate_llm_logits.py) to simply pass None instead of importing
+    # the default constants.
+    eval_metric = eval_metric if eval_metric is not None else DEFAULT_EVAL_METRIC
+    relative_tolerance = (
+        relative_tolerance
+        if relative_tolerance is not None
+        else DEFAULT_RELATIVE_TOLERANCE
+    )
+    absolute_tolerance = (
+        absolute_tolerance
+        if absolute_tolerance is not None
+        else DEFAULT_ABSOLUTE_TOLERANCE
+    )
+    cos_dist_threshold = (
+        cos_dist_threshold
+        if cos_dist_threshold is not None
+        else DEFAULT_COS_DIST_THRESHOLD
+    )
+    kl_div_threshold = (
+        kl_div_threshold
+        if kl_div_threshold is not None
+        else DEFAULT_KL_DIV_THRESHOLD
+    )
+    diff_count = diff_count if diff_count is not None else DEFAULT_DIFF_COUNT
+    print_suggested_tolerances = (
+        print_suggested_tolerances
+        if print_suggested_tolerances is not None
+        else DEFAULT_PRINT_SUGGESTED_TOLERANCES
     )
 
     first_framework = "Pipeline"
