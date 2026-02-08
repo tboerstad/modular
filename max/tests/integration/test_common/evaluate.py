@@ -127,7 +127,12 @@ T = TypeVar("T")
 def _create_batches(
     requests: Sequence[T], batch_size: int | list[int] = 1
 ) -> list[Sequence[T]]:
-    """Group requests into batches."""
+    """Group requests into batches.
+
+    Args:
+        batch_size: Either a uniform batch size (int) or explicit per-batch
+            sizes (list[int]) that must sum to len(requests).
+    """
     if isinstance(batch_size, int):
         return [
             requests[i : i + batch_size]
@@ -228,7 +233,8 @@ def run_model(
         )
         outputs = pipeline.generate(batch)
         if print_outputs:
-            for request, output in zip(requests_in_batch, outputs):
+            for j in range(len(batch)):
+                request = requests_in_batch[j]
                 prompt = request.prompt
                 print(
                     "Prompt:",
@@ -239,14 +245,14 @@ def run_model(
                 print(
                     "Output:",
                     tokenizer.delegate.decode(
-                        output.tokens, skip_special_tokens=True
+                        outputs[j].tokens, skip_special_tokens=True
                     ),
                 )
 
-    return [
-        {"prompt": prompts_by_id[req_id], "values": values}
-        for req_id, values in stored_logits.values.items()
-    ]
+    results: list[dict[str, Any]] = []
+    for req_id, values in stored_logits.values.items():
+        results.append({"prompt": prompts_by_id[req_id], "values": values})
+    return results
 
 
 class StoreLogits:
