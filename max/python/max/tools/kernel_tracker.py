@@ -18,12 +18,14 @@ the resulting IR to record every kernel dispatch with its tensor shapes.
 
 Library usage::
 
-    from max.tools.kernel_tracker import track
+    from max.tools.kernel_tracker import track, track_model
     report = track(my_graph)
+    report = track_model("modularai/Llama-3.1-8B-Instruct-GGUF")
 
 CLI usage::
 
     python -m max.tools.kernel_tracker --test -o report.json
+    python -m max.tools.kernel_tracker --model modularai/Llama-3.1-8B-Instruct-GGUF
 """
 
 from __future__ import annotations
@@ -67,6 +69,9 @@ def track(graph: Graph) -> dict[str, Any]:
 
     Applies ``MOToMOGG`` to select concrete kernels, then walks the IR.
     If lowering fails, falls back to the pre-lowering MO ops and warns.
+
+    .. warning:: This **mutates** *graph*'s MLIR module in-place (MOToMOGG
+       is an in-place pass).  Don't reuse the graph for compilation afterwards.
 
     Returns a dict ready for ``json.dumps``::
 
@@ -128,6 +133,59 @@ def track(graph: Graph) -> dict[str, Any]:
             "histogram": dict(hist.most_common()),
         },
     }
+
+
+# -- Pipeline integration --------------------------------------------------
+
+
+class _TrackingDone(Exception):
+    """Raised inside the ``session.load`` interceptor to abort pipeline init
+    early once the graph has been captured and tracked."""
+
+    def __init__(self, report: dict[str, Any]) -> None:
+        self.report = report
+
+
+def track_model(model_path: str, **config_kwargs: Any) -> dict[str, Any]:
+    """Build a model's graph via the pipeline registry and track it.
+
+    Uses ``PIPELINE_REGISTRY.retrieve`` to construct the full pipeline
+    (downloading config + weights from *model_path*), but intercepts
+    ``InferenceSession.load`` right before compilation to run
+    ``MOToMOGG`` and walk the IR.  Pipeline initialization is aborted
+    after capturing — no GPU compilation happens.
+
+    Any extra *config_kwargs* are forwarded to
+    :class:`~max.pipelines.PipelineConfig`.
+
+    Example::
+
+        report = track_model(
+            "modularai/Llama-3.1-8B-Instruct-GGUF",
+            quantization_encoding="bfloat16",
+        )
+    """
+    from max.engine import InferenceSession
+    from max.pipelines import PIPELINE_REGISTRY, PipelineConfig
+
+    original_load = InferenceSession.load
+
+    def _intercept(self: InferenceSession, model: Any, **kw: Any) -> Any:
+        if isinstance(model, Graph):
+            raise _TrackingDone(track(model))
+        # Non-Graph loads (e.g. file paths) — let them through.
+        return original_load(self, model, **kw)
+
+    InferenceSession.load = _intercept  # type: ignore[assignment]
+    try:
+        config = PipelineConfig(model_path=model_path, **config_kwargs)
+        PIPELINE_REGISTRY.retrieve(config)
+    except _TrackingDone as exc:
+        return exc.report
+    finally:
+        InferenceSession.load = original_load  # type: ignore[assignment]
+
+    raise RuntimeError(f"No graph was captured for {model_path!r}")
 
 
 # -- MLIR helpers ----------------------------------------------------------
@@ -206,14 +264,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     import argparse
 
     p = argparse.ArgumentParser(description="Track kernel hits in a MAX Graph.")
-    p.add_argument("--test", action="store_true", help="Use built-in test graph.")
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--test", action="store_true", help="Use built-in test graph.")
+    src.add_argument("--model", type=str, help="HuggingFace model repo to track.")
     p.add_argument("--output", "-o", default="-", help="Output file (default: stdout).")
     args = p.parse_args(argv)
 
-    if not args.test:
-        p.error("Pass --test, or use track() as a library with your own Graph.")
+    if args.test:
+        report = track(_build_test_graph())
+    else:
+        report = track_model(args.model)
 
-    report = track(_build_test_graph())
     out = json.dumps(report, indent=2) + "\n"
 
     if args.output == "-":

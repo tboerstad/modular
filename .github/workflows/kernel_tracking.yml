@@ -23,13 +23,21 @@ permissions:
   actions: read
 
 concurrency:
-  group: kernel-tracking
+  group: kernel-tracking-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   track-kernels:
-    name: Track kernel hits
+    name: ${{ matrix.model }}
     runs-on: large-oss-linux
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - modularai/Llama-3.1-8B-Instruct-GGUF
+          # Add your smoke-tested models here:
+          # - modularai/Mistral-7B-Instruct-v0.3
+          # - bert-base-uncased
     defaults:
       run:
         shell: bash
@@ -49,13 +57,16 @@ jobs:
           pip install modular \
             --extra-index-url https://whl.modular.com/nightly/simple/
 
-      - name: Run kernel tracker
+      - name: Track kernels
         run: |
           source .venv/bin/activate
-          python -m max.tools.kernel_tracker --test -o kernel_report.json
+          SLUG=$(echo "${{ matrix.model }}" | tr '/:' '-')
+          python -m max.tools.kernel_tracker \
+            --model "${{ matrix.model }}" \
+            -o "kernel-report-${SLUG}.json"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: kernel-report-${{ github.sha }}
-          path: kernel_report.json
+          name: kernel-report-${{ strategy.job-index }}
+          path: kernel-report-*.json
           retention-days: 90
