@@ -125,26 +125,20 @@ T = TypeVar("T")
 
 
 def _create_batches(
-    requests: Sequence[T], batch_size: int | list[int] = 1
+    requests: Sequence[T], batch_sizes: int | list[int] = 1
 ) -> list[Sequence[T]]:
-    """Group requests into batches.
-
-    Args:
-        batch_size: Either a uniform batch size (int) or explicit per-batch
-            sizes (list[int]) that must sum to len(requests).
-    """
-    if isinstance(batch_size, int):
-        return [
-            requests[i : i + batch_size]
-            for i in range(0, len(requests), batch_size)
-        ]
-    if sum(batch_size) != len(requests):
-        raise ValueError(
-            "The sum of the batch sizes must be equal to the number of requests."
-        )
+    """Group requests into batches."""
+    if isinstance(batch_sizes, list):
+        if sum(batch_sizes) != len(requests):
+            raise ValueError(
+                "The sum of the batch sizes must be equal to the number of requests."
+            )
+    else:
+        batch_sizes = [batch_sizes] * len(requests)
     batches = []
+
     start = 0
-    for size in batch_size:
+    for size in batch_sizes:
         batches.append(requests[start : start + size])
         start += size
     return batches
