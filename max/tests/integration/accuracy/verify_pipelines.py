@@ -342,6 +342,25 @@ def dump_results(
             )
 
 
+def print_summary(
+    verdicts: Mapping[str, VerificationVerdict],
+    *,
+    previous_verdicts: Mapping[str, VerificationVerdict] | None = None,
+) -> None:
+    """Print a human-readable status summary and full results to stdout."""
+    print()
+    print("-" * 40)
+    print()
+    print("# pipelines run:", len(verdicts))
+    for status in VerificationStatus:
+        print(
+            f"# pipelines {status.name}:",
+            sum(v.status == status for v in verdicts.values()),
+        )
+    print()
+    dump_results(verdicts, previous_verdicts=previous_verdicts)
+
+
 @dataclass(frozen=True)
 class TagFilter:
     """User-provided filters on a tag list."""
@@ -1497,17 +1516,7 @@ def main(
     if store_verdicts_json:
         save_verdicts_to_json(verdicts, store_verdicts_json)
 
-    print()
-    print("-" * 40)
-    print()
-    print("# pipelines run:", len(verdicts))
-    for status in list(VerificationStatus):
-        print(
-            f"# pipelines {status.name}:",
-            sum(v.status == status for v in verdicts.values()),
-        )
-    print()
-    dump_results(verdicts, previous_verdicts=previous_verdicts)
+    print_summary(verdicts, previous_verdicts=previous_verdicts)
 
     if any(v.status != VerificationStatus.OK for v in verdicts.values()):
         if all(
