@@ -98,7 +98,11 @@ def resolve_rlocation(rloc: str) -> Path:
     from python.runfiles import runfiles
 
     r = runfiles.Create()
-    assert r
+    if r is None:
+        raise RuntimeError(
+            "Could not create runfiles instance. "
+            "Are you running inside a Bazel action?"
+        )
     resolved = r.Rlocation(rloc)
     if resolved is None:
         raise FileNotFoundError(f"Rlocation {rloc!r} could not be resolved")
