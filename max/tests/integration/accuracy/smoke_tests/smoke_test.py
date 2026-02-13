@@ -34,16 +34,18 @@ then the virtualenvs are not needed.
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import time
+from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from functools import cache
 from pathlib import Path
 from pprint import pformat
 from subprocess import Popen, TimeoutExpired, check_call, check_output
-from tempfile import TemporaryDirectory
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 from typing import Any
 
 import click
@@ -71,6 +73,187 @@ logger = logging.getLogger(__name__)
 
 EvalResults = dict[str, Any]
 EvalSamples = list[dict[str, Any]]
+
+# Matches: [OP] LAUNCH kernel_name [id=N] detail_string
+_OP_LAUNCH_RE = re.compile(
+    r"\[OP\]\s+LAUNCH\s+(?P<kernel>\S+)\s+\[id=\d+\]\s*(?P<detail>.*)"
+)
+
+# Maps trace names emitted by Trace[TraceLevel.OP] to the Mojo source file
+# containing the GPU/CPU kernel implementation.  Prefix-matched so that e.g.
+# "mo.mla.decode.ragged.paged" matches "mo.mla.decode.ragged".
+# Ordered longest-prefix-first so the first match wins.
+_KERNEL_SOURCE_MAP: list[tuple[str, str]] = [
+    # ---- MLA (Multi-Latent Attention) ----
+    ("flare_mla_decoding", "nn/mla.mojo -> mla_decoding()"),
+    ("flare_mla_prefill", "nn/mla.mojo -> mla_prefill()"),
+    ("mo.mla.graph.prefill.decode.bf16.paged", "nn/mla_graph.mojo"),
+    ("mo.mla.graph.prefill.decode.paged", "nn/mla_graph.mojo"),
+    ("mo.mla.graph.prefill.paged", "nn/mla_graph.mojo"),
+    ("mo.mla.graph.decode.paged", "nn/mla_graph.mojo"),
+    ("mo.mla.decode.ragged", "nn/kv_cache_ragged.mojo -> generic_flare_mla_decode_kv_cache_ragged()"),
+    ("mo.mla.prefill.ragged.paged.plan", "nn/kv_cache_ragged.mojo -> generic_flare_mla_prefill_ragged_paged_plan()"),
+    ("mo.mla.prefill.ragged", "nn/kv_cache_ragged.mojo -> generic_flare_mla_prefill_kv_cache_ragged()"),
+    ("mo.mla.decompress.k.cache", "nn/kv_cache_ragged.mojo -> generic_flare_mla_decompress_k_cache_ragged_paged()"),
+    # ---- Flash Attention / MHA ----
+    ("flash_attention_split_kv", "nn/flash_attention.mojo -> flash_attention_split_kv()"),
+    ("flash_attention", "nn/mha.mojo -> flash_attention() [SM90: mha_sm90.mojo, SM100: mha_sm100_2q/1q.mojo]"),
+    ("mo.mha.padded.continuous_batching", "nn/kv_cache.mojo"),
+    ("mo.mha.padded", "nn/kv_cache.mojo"),
+    ("mo.mha.ragged.paged", "nn/kv_cache_ragged.mojo"),
+    ("mo.cross_attention.ragged", "nn/kv_cache_ragged.mojo"),
+    # ---- Matmul / GEMM ----
+    ("matmul", "linalg/matmul/__init__.mojo [SM100: gpu/sm100_structured/, SM90: gpu/sm90/, AMD: gpu/amd/]"),
+    ("batched_matmul_via_matmul", "linalg/bmm.mojo"),
+    ("batched_matmul", "linalg/bmm.mojo"),
+    ("swish_glu", "linalg/dual_gemm.mojo"),
+    ("_cublasLt_matmul", "linalg/matmul/vendor/blas.mojo (cuBLASLt)"),
+    ("_cublas_matmul", "linalg/matmul/vendor/blas.mojo (cuBLAS)"),
+    ("_hipblasLt_matmul", "linalg/matmul/vendor/blas.mojo (hipBLASLt)"),
+    ("_rocblas_matmul", "linalg/matmul/vendor/blas.mojo (rocBLAS)"),
+    ("mo.grouped.matmul", "MOGGKernelAPI.mojo -> grouped matmul"),
+    ("mo.matmul.dynamic.block.scaled", "MOGGKernelAPI.mojo -> block-scaled matmul"),
+    ("mo.matmul_dynamic_scaled_fp8", "MOGGKernelAPI.mojo -> FP8 scaled matmul"),
+    ("mo.matmul_static_scaled_float8", "MOGGKernelAPI.mojo -> static FP8 matmul"),
+    ("mo.kv_matmul.ragged.paged", "nn/kv_cache_ragged.mojo"),
+    ("mo.k_matmul.ragged.paged", "nn/kv_cache_ragged.mojo"),
+    # ---- Quantization ----
+    ("quantize_dynamic_scaled_fp8", "linalg/fp8_quantization.mojo"),
+    # ---- Normalization ----
+    ("rms_norm_fused_residual_add", "nn/normalization.mojo -> rms_norm_fused_residual_add()"),
+    ("rms_norm_fused_fp8", "nn/normalization.mojo -> rms_norm_fused_fp8()"),
+    ("rms_norm_kv_cache_ragged_paged", "nn/kv_cache.mojo"),
+    ("rms_norm", "nn/normalization.mojo -> rms_norm()"),
+    ("layer_norm", "nn/normalization.mojo -> layer_norm()"),
+    ("group_norm", "nn/normalization.mojo -> group_norm()"),
+    # ---- KV Cache ----
+    ("kv-cache-2m-iadd", "nn/kv_cache_ragged.mojo"),
+    ("mo.fused_qkv_matmul", "nn/kv_cache.mojo + nn/kv_cache_ragged.mojo"),
+    ("mo.fused_qk_rope", "nn/kv_cache.mojo + nn/kv_cache_ragged.mojo"),
+    ("mo.rope.ragged", "MOGGKernelAPI.mojo -> rope_ragged()"),
+    ("mo.kv_cache", "MOGGKernelAPI.mojo"),
+    # ---- Expert Parallelism / MoE ----
+    ("ep.fused_silu.nvfp4", "Mogg/MOGGKernelAPI/ep_api.mojo"),
+    ("ep.fused_silu.fp8", "Mogg/MOGGKernelAPI/ep_api.mojo"),
+    ("ep.fused_silu", "Mogg/MOGGKernelAPI/ep_api.mojo"),
+    ("ep.dispatch_async", "shmem/ep.mojo"),
+    ("ep.dispatch_wait", "shmem/ep.mojo"),
+    ("ep.dispatch", "shmem/ep.mojo"),
+    ("ep.combine_wait", "shmem/ep.mojo"),
+    ("ep.combine", "shmem/ep.mojo"),
+    ("mo.moe.create_indices", "nn/moe.mojo"),
+    ("mo.moe.router_group_limited", "nn/moe.mojo"),
+    # ---- Elementwise (via algorithm.functional.elementwise) ----
+    ("elementwise", "algorithm/functional.mojo -> elementwise() [wraps MOGGKernelAPI ops]"),
+    # ---- Other ops ----
+    ("softmax", "nn/softmax.mojo"),
+    ("conv_transposed", "nn/conv_transpose.mojo"),
+    ("conv", "nn/conv.mojo"),
+    ("gather", "nn/gather_scatter.mojo"),
+    ("concat", "nn/concat.mojo"),
+    ("argsort", "nn/argsort.mojo"),
+    ("arg_nonzero", "nn/arg_nonzero.mojo"),
+    ("sliced-add", "MOGGKernelAPI.mojo"),
+]
+
+
+def _lookup_kernel_source(trace_name: str) -> str | None:
+    """Look up the Mojo source file for a kernel trace name (prefix match)."""
+    for prefix, source in _KERNEL_SOURCE_MAP:
+        if trace_name.startswith(prefix):
+            return source
+    return None
+
+
+@dataclass
+class KernelHit:
+    """A single observed kernel invocation from op logging."""
+
+    kernel: str
+    detail: str
+
+    @property
+    def shape_key(self) -> str:
+        """Return a deduplication key: kernel name + shapes."""
+        return f"{self.kernel} | {self.detail}" if self.detail else self.kernel
+
+
+@dataclass
+class KernelProfile:
+    """Aggregated kernel profile for a model."""
+
+    model: str
+    gpu_name: str
+    gpu_count: int
+    total_kernel_launches: int
+    unique_kernels: int
+    kernels: list[dict[str, Any]] = field(default_factory=list)
+
+
+def parse_kernel_hits(stderr_lines: list[str]) -> list[KernelHit]:
+    """Parse [OP] LAUNCH lines from server stderr into KernelHit objects."""
+    hits: list[KernelHit] = []
+    for line in stderr_lines:
+        m = _OP_LAUNCH_RE.search(line)
+        if m:
+            hits.append(KernelHit(kernel=m.group("kernel"), detail=m.group("detail").strip()))
+    return hits
+
+
+def build_kernel_profile(
+    model: str, hits: list[KernelHit]
+) -> KernelProfile:
+    """Aggregate kernel hits into a profile summary."""
+    gpu_name, gpu_count = get_gpu_name_and_count()
+
+    # Count by (kernel, detail) to group identical invocations
+    counter: Counter[str] = Counter()
+    detail_map: dict[str, str] = {}
+    kernel_name_map: dict[str, str] = {}
+    for hit in hits:
+        key = hit.shape_key
+        counter[key] += 1
+        detail_map[key] = hit.detail
+        kernel_name_map[key] = hit.kernel
+
+    kernels = []
+    for key, count in counter.most_common():
+        kernel_name = kernel_name_map[key]
+        entry: dict[str, Any] = {
+            "kernel": kernel_name,
+            "count": count,
+        }
+        source = _lookup_kernel_source(kernel_name)
+        if source:
+            entry["source"] = source
+        detail = detail_map[key]
+        if detail:
+            entry["detail"] = detail
+            # Parse semicolon-delimited key=value pairs from detail
+            for part in detail.split(";"):
+                part = part.strip()
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    entry[k.strip()] = v.strip()
+        kernels.append(entry)
+
+    return KernelProfile(
+        model=model,
+        gpu_name=gpu_name,
+        gpu_count=gpu_count,
+        total_kernel_launches=len(hits),
+        unique_kernels=len(counter),
+        kernels=kernels,
+    )
+
+
+def write_kernel_profile(path: Path, profile: KernelProfile) -> Path:
+    """Write kernel profile to a JSON file and return the path."""
+    path.mkdir(parents=True, exist_ok=True)
+    fp = path / "kernel_profile.json"
+    fp.write_text(json.dumps(asdict(profile), indent=2), encoding="utf-8")
+    logger.info(f"Kernel profile written to {fp}")
+    return fp
 
 
 def is_deepseek(model: str) -> bool:
@@ -339,8 +522,17 @@ def print_samples(samples: EvalSamples, print_cot: bool) -> None:
         logger.info(f"{status} {extracted}")
 
 
-def start_server(cmd: list[str], timeout: int) -> tuple[Popen[bytes], float]:
+def start_server(
+    cmd: list[str],
+    timeout: int,
+    *,
+    kernel_profile: bool = False,
+    stderr_log: Path | None = None,
+) -> tuple[Popen[bytes], float]:
     env = os.environ.copy()
+
+    if kernel_profile:
+        env["MOJO_LOGGING_LEVEL"] = "trace"
 
     if not _inside_bazel():
         # SGLang depends on ninja which is in the serve environment
@@ -349,21 +541,34 @@ def start_server(cmd: list[str], timeout: int) -> tuple[Popen[bytes], float]:
         prev_path = env.get("PATH")
         env["PATH"] = f"{venv_bin}:{prev_path}" if prev_path else venv_bin
 
+    # When profiling kernels, tee stderr to a file so we can parse [OP] lines.
+    stderr_dest: int | None = None
+    stderr_file = None
+    if stderr_log is not None:
+        stderr_file = open(stderr_log, "wb")
+        stderr_dest = stderr_file.fileno()
+
     start = time.monotonic()
-    proc = Popen(cmd, start_new_session=True, env=env)
+    proc = Popen(cmd, start_new_session=True, env=env, stderr=stderr_dest)
     try:
         deadline = start + timeout
         while time.monotonic() < deadline:
             if server_is_ready():
                 break
             if proc.poll() is not None:
+                if stderr_file:
+                    stderr_file.close()
                 raise RuntimeError("Server process terminated unexpectedly")
             time.sleep(0.5)
         else:
+            if stderr_file:
+                stderr_file.close()
             raise TimeoutError(f"Server did not start in {timeout} seconds")
         return proc, time.monotonic() - start
     except:
         gracefully_stop_process(proc)
+        if stderr_file:
+            stderr_file.close()
         raise
 
 
@@ -431,6 +636,16 @@ def write_results(
     default=320,
     help="Number of questions to ask the model",
 )
+@click.option(
+    "--kernel-profile",
+    is_flag=True,
+    default=False,
+    help=(
+        "Instead of running eval, start the server with Mojo op logging enabled, "
+        "send a single request to trigger compilation, and write a kernel_profile.json "
+        "listing every kernel hit with its shapes. Requires --output-path."
+    ),
+)
 def smoke_test(
     hf_model_path: str,
     framework: str,
@@ -439,6 +654,7 @@ def smoke_test(
     print_cot: bool,
     max_concurrent: int,
     num_questions: int,
+    kernel_profile: bool,
 ) -> None:
     """
     Example usage: ./bazelw run smoke-test -- meta-llama/llama-3.2-1b-instruct
@@ -456,6 +672,14 @@ def smoke_test(
 
     if print_cot and not print_responses:
         raise ValueError("--print-cot must be used with --print-responses")
+
+    if kernel_profile and framework not in ("max", "max-ci"):
+        raise click.UsageError(
+            "--kernel-profile only works with MAX frameworks (max or max-ci)"
+        )
+
+    if kernel_profile and output_path is None:
+        raise click.UsageError("--kernel-profile requires --output-path")
 
     build_workspace = os.getenv("BUILD_WORKSPACE_DIRECTORY")
     if output_path and build_workspace and not output_path.is_absolute():
@@ -487,11 +711,66 @@ def smoke_test(
         tasks = [VISION_TASK] + tasks
 
     logger.info(f"Starting server with command:\n {' '.join(cmd)}")
-    results = []
-    all_samples = []
     timeout = 900
     if is_deepseek(model):
         timeout = 1800
+
+    # --- Kernel profile mode ---
+    if kernel_profile:
+        assert output_path is not None  # Enforced above
+        profile_output = output_path / safe_model_name(model)
+
+        with NamedTemporaryFile(
+            mode="w+", suffix=".log", prefix="kernel_profile_", delete=False
+        ) as stderr_tmp:
+            stderr_log = Path(stderr_tmp.name)
+
+        logger.info(
+            "Kernel profile mode: starting server with MOJO_LOGGING_LEVEL=trace"
+        )
+        server_process, startup_time = start_server(
+            cmd, timeout, kernel_profile=True, stderr_log=stderr_log
+        )
+        try:
+            logger.info(f"Server started in {startup_time:.2f} seconds")
+
+            # Fire a single request to trigger compilation and one inference pass
+            task = VISION_TASK if is_vision_model else TEXT_TASK
+            test_single_request(model, task)
+            logger.info("Single request completed, collecting kernel trace...")
+        finally:
+            try:
+                gracefully_stop_process(server_process)
+            except Exception:
+                logger.exception(f"Failed to shutdown {framework.upper()}")
+
+        # Parse the captured stderr for [OP] LAUNCH lines
+        stderr_lines = stderr_log.read_text(encoding="utf-8", errors="replace").splitlines()
+        stderr_log.unlink(missing_ok=True)
+
+        hits = parse_kernel_hits(stderr_lines)
+        logger.info(f"Captured {len(hits)} kernel launches")
+
+        profile = build_kernel_profile(model, hits)
+        fp = write_kernel_profile(profile_output, profile)
+
+        # Summary to stdout
+        logger.info(
+            f"Kernel profile: {profile.total_kernel_launches} launches, "
+            f"{profile.unique_kernels} unique kernels"
+        )
+        for entry in profile.kernels[:20]:
+            src = f"  [{entry['source']}]" if entry.get("source") else ""
+            logger.info(
+                f"  {entry['count']:>5}x  {entry['kernel']}{src}"
+            )
+        if len(profile.kernels) > 20:
+            logger.info(f"  ... and {len(profile.kernels) - 20} more (see {fp})")
+        return
+
+    # --- Normal eval mode ---
+    results = []
+    all_samples = []
 
     server_process, startup_time = start_server(cmd, timeout)
     try:
