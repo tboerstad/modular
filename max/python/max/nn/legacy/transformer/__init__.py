@@ -15,12 +15,14 @@
 from .distributed_transformer import (
     DistributedTransformer,
     DistributedTransformerBlock,
+    distributed_logits_postprocess,
 )
 from .transformer import (
     ReturnHiddenStates,
     ReturnLogits,
     Transformer,
     TransformerBlock,
+    logits_postprocess,
 )
 
 __all__ = [
@@ -30,4 +32,6 @@ __all__ = [
     "ReturnLogits",
     "Transformer",
     "TransformerBlock",
+    "distributed_logits_postprocess",
+    "logits_postprocess",
 ]

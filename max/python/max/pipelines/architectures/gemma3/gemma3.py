@@ -28,6 +28,9 @@ from max.nn.legacy.rotary_embedding import (
     Llama3RotaryEmbedding,
 )
 from max.nn.legacy.transformer import ReturnLogits
+from max.nn.legacy.transformer.distributed_transformer import (
+    distributed_logits_postprocess,
+)
 
 from .layers.attention import Gemma3Attention
 from .layers.rms_norm import Gemma3RMSNorm
@@ -184,80 +187,16 @@ class Gemma3TextModel(Module):
                 **kwargs,
             )
 
-        last_token_indices = [offsets[1:] - 1 for offsets in input_row_offsets]
-        last_token_h = []
-        if h:
-            last_token_h = [
-                ops.gather(h_device, indices, axis=0)
-                for h_device, indices in zip(h, last_token_indices, strict=True)
-            ]
-        last_logits = ops.cast(
-            # Take only the device 0 logits to device-to-host transfer.
-            self.lm_head(
-                [
-                    self.norm_shards[i](last_token_h[i])
-                    for i in range(len(last_token_h))
-                ],
-                signal_buffers,
-            )[0],
-            DType.float32,
+        return distributed_logits_postprocess(
+            h,
+            list(input_row_offsets),
+            return_n_logits,
+            norm_shards=self.norm_shards,
+            lm_head=self.lm_head,
+            signal_buffers=signal_buffers,
+            return_logits=self.return_logits,
+            device=self.devices[0],
         )
-
-        logits = None
-        offsets = None
-
-        if self.return_logits == ReturnLogits.VARIABLE and h:
-            # Create range and gather indices for variable logits
-            return_range = ops.range(
-                start=return_n_logits[0],
-                stop=0,
-                step=-1,
-                out_dim="return_n_logits_range",
-                dtype=DType.int64,
-                device=self.devices[0],
-            )
-            last_indices = [
-                ops.reshape(
-                    ops.unsqueeze(row_offset[1:], -1) - return_range,
-                    shape=(-1,),
-                )
-                for row_offset in input_row_offsets
-            ]
-
-            # Gather, normalize, and get logits
-            variable_tokens = [
-                self.norm_shards[i](ops.gather(h_device, indices, axis=0))
-                for i, (h_device, indices) in enumerate(
-                    zip(h, last_indices, strict=True)
-                )
-            ]
-            logits = ops.cast(
-                self.lm_head(variable_tokens, signal_buffers)[0], DType.float32
-            )
-            offsets = ops.range(
-                0,
-                last_indices[0].shape[0] + return_n_logits[0],
-                return_n_logits[0],
-                out_dim="logit_offsets",
-                dtype=DType.int64,
-                device=self.devices[0],
-            )
-
-        elif self.return_logits == ReturnLogits.ALL and h:
-            # Apply normalization to all hidden states and get all logits
-            all_normalized = [
-                self.norm_shards[i](h_device) for i, h_device in enumerate(h)
-            ]
-            logits = ops.cast(
-                self.lm_head(all_normalized, signal_buffers)[0], DType.float32
-            )
-            offsets = input_row_offsets[0]
-
-        if offsets is not None:
-            assert logits is not None
-            return (last_logits, logits, offsets)
-
-        return (last_logits,)
 
 
 class Gemma3(Module):
