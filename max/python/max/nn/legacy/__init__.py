@@ -33,6 +33,7 @@ from .conv import Conv1D, Conv2d, Conv3D
 from .conv_transpose import ConvTranspose1d, WeightNormConvTranspose1d
 from .data_parallelism import split_batch, split_batch_replicated
 from .embedding import Embedding, VocabParallelEmbedding
+from .fat_tensor import FatTensor
 from .float8_config import (
     Float8Config,
     Float8InputScaleSpec,
@@ -110,6 +111,7 @@ __all__ = [
     "DistributedTransformerBlock",
     "DynamicRotaryEmbedding",
     "Embedding",
+    "FatTensor",
     "Float8Config",
     "Float8InputScaleSpec",
     "Float8ScaleGranularity",
