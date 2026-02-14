@@ -40,6 +40,7 @@ from max.nn.legacy.float8_ops import quantized_matmul
 from max.support.math import ceildiv
 
 from .clamp import clamp
+from .fat_tensor import FatTensor
 from .layer import Module, Shardable
 
 
@@ -808,33 +809,67 @@ class MLP(Module, Shardable):
         self.feed_forward_length = feed_forward_length
 
         if not is_sharding:
-            self.gate_proj = linear_cls(  # [ffl, hidden]
-                in_dim=hidden_dim,
-                out_dim=feed_forward_length,
-                dtype=dtype,
-                device=devices[0],
-                quantization_encoding=quantization_encoding,
-                has_bias=has_bias,
-                float8_config=float8_config,
+            # When quantized and bias-free, use FatTensor directly as
+            # the projection layer.  FatTensor bundles weight + scales
+            # into one self-contained module and dispatches to the right
+            # kernel internally, so callers never branch on fp4 vs fp8.
+            use_fat_tensor = (
+                float8_config is not None
+                and not has_bias
+                and quantization_encoding is None
             )
-            self.down_proj = linear_cls(
-                in_dim=feed_forward_length,
-                out_dim=hidden_dim,
-                dtype=dtype,
-                device=devices[0],
-                quantization_encoding=quantization_encoding,
-                has_bias=has_bias,
-                float8_config=float8_config,
-            )
-            self.up_proj = linear_cls(
-                in_dim=hidden_dim,
-                out_dim=feed_forward_length,
-                dtype=dtype,
-                device=devices[0],
-                quantization_encoding=quantization_encoding,
-                has_bias=has_bias,
-                float8_config=float8_config,
-            )
+
+            if use_fat_tensor:
+                assert float8_config is not None
+                self.gate_proj: FatTensor | Linear = FatTensor(
+                    in_dim=hidden_dim,
+                    out_dim=feed_forward_length,
+                    dtype=dtype,
+                    device=devices[0],
+                    float8_config=float8_config,
+                )
+                self.down_proj: FatTensor | Linear = FatTensor(
+                    in_dim=feed_forward_length,
+                    out_dim=hidden_dim,
+                    dtype=dtype,
+                    device=devices[0],
+                    float8_config=float8_config,
+                )
+                self.up_proj: FatTensor | Linear = FatTensor(
+                    in_dim=hidden_dim,
+                    out_dim=feed_forward_length,
+                    dtype=dtype,
+                    device=devices[0],
+                    float8_config=float8_config,
+                )
+            else:
+                self.gate_proj = linear_cls(  # [ffl, hidden]
+                    in_dim=hidden_dim,
+                    out_dim=feed_forward_length,
+                    dtype=dtype,
+                    device=devices[0],
+                    quantization_encoding=quantization_encoding,
+                    has_bias=has_bias,
+                    float8_config=float8_config,
+                )
+                self.down_proj = linear_cls(
+                    in_dim=feed_forward_length,
+                    out_dim=hidden_dim,
+                    dtype=dtype,
+                    device=devices[0],
+                    quantization_encoding=quantization_encoding,
+                    has_bias=has_bias,
+                    float8_config=float8_config,
+                )
+                self.up_proj = linear_cls(
+                    in_dim=hidden_dim,
+                    out_dim=feed_forward_length,
+                    dtype=dtype,
+                    device=devices[0],
+                    quantization_encoding=quantization_encoding,
+                    has_bias=has_bias,
+                    float8_config=float8_config,
+                )
 
         self.quantization_encoding = quantization_encoding
         self.float8_config = float8_config
@@ -966,7 +1001,7 @@ class MLP(Module, Shardable):
                 hidden_dim=self.hidden_dim,
                 feed_forward_length=self.feed_forward_length,
                 devices=[device],
-                has_bias=self.gate_proj.bias is not None,
+                has_bias=getattr(self.gate_proj, "bias", None) is not None,
                 activation_function=self._activation_function_name,
                 float8_config=self.float8_config,
                 dist_gemm_config=self.dist_gemm_config,
