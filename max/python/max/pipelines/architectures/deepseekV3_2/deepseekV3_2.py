@@ -137,25 +137,22 @@ class DeepseekV3_2DecoderLayer(Module):
             buffer_size=config.max_batch_context_length,
         )
 
-        nvfp4_enabled = (
-            config.float8_config is not None and config.float8_config.is_nvfp4
-        )
-        use_fp8_mla = config.float8_config is not None and not nvfp4_enabled
-
-        if config.float8_config is not None and nvfp4_enabled:
-            mla_kwargs["o_proj_float8_config"] = config.float8_config
-            mla_kwargs["o_proj_dtype"] = config.dtype
-
+        # Select MLA implementation based on quantization format.
+        # FP8 uses a dedicated MLA class that quantizes all projections.
+        # NVFP4 uses the base MLA with only o_proj quantized.
         mla_cls: (
             type[DataParallelLatentAttentionWithRope]
             | type[DataParallelLatentAttentionWithRopeFp8]
         )
-        if use_fp8_mla:
+        if config.float8_config is not None and not config.float8_config.is_nvfp4:
             mla_kwargs["float8_config"] = config.float8_config
             mla_cls = DataParallelLatentAttentionWithRopeFp8
         else:
             mla_kwargs["dtype"] = DType.bfloat16
             mla_cls = DataParallelLatentAttentionWithRope
+            if config.float8_config is not None:
+                mla_kwargs["o_proj_float8_config"] = config.float8_config
+                mla_kwargs["o_proj_dtype"] = config.dtype
 
         self.self_attn = mla_cls(**mla_kwargs)
 

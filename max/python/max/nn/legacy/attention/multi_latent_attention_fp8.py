@@ -30,7 +30,7 @@ from max.graph import (
 from max.support.math import ceildiv
 
 from ..float8_config import Float8Config, nvfp4_packed_k
-from ..float8_ops import matmul_float8
+from ..float8_ops import quantized_matmul
 from ..kernels import (
     flare_mla_prefill_plan,
     fused_qkv_ragged_matmul_scaled_float8,
@@ -668,13 +668,12 @@ class LatentAttentionWithRopeFp8(Module, Shardable):
         # Apply layer norm
         q_a_normed = self.q_a_layernorm(q_a_out)
 
-        # Second FP8 matmul: q_a_normed @ q_b_proj.T
-        xq = matmul_float8(
-            x=q_a_normed,
-            weight=self.q_b_proj,
-            weight_scale=self.q_b_proj_scale,
-            input_scale=None,  # Dynamic scaling
-            float8_config=self.float8_config,
+        # Second quantized matmul: q_a_normed @ q_b_proj.T
+        xq = quantized_matmul(
+            q_a_normed,
+            self.q_b_proj,
+            self.q_b_proj_scale,
+            self.float8_config,
             group_size_or_per_token=self.scales_granularity_mnk[2],
         )
 
