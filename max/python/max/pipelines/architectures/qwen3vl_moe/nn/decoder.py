@@ -36,7 +36,7 @@ from max.nn.legacy.linear import MLP, ColumnParallelLinear
 from max.nn.legacy.norm import RMSNorm
 from max.nn.legacy.transformer import ReturnLogits
 from max.nn.legacy.transformer.distributed_transformer import (
-    distributed_logits_postprocess,
+    DistributedLogitsPostprocessMixin,
     forward_sharded_layers,
 )
 from max.pipelines.architectures.internvl.embedding_utils import (
@@ -227,7 +227,7 @@ class Qwen3VLMoeTextDecoderLayer(Module):
             return mlp
 
 
-class Qwen3VLMoEDecoder(Module):
+class Qwen3VLMoEDecoder(DistributedLogitsPostprocessMixin, Module):
     """Qwen3VL MoE decoder model with support for vision-language tasks.
 
     This decoder implements the Qwen3VL MoE architecture with:
@@ -462,13 +462,6 @@ class Qwen3VLMoEDecoder(Module):
                     )
                 ]
 
-        return distributed_logits_postprocess(
-            h,
-            input_row_offsets,
-            return_n_logits,
-            norm_shards=self.norm_shards,
-            lm_head=self.lm_head,
-            signal_buffers=signal_buffers,
-            return_logits=self.return_logits,
-            device=self.devices[0],
+        return self._postprocess_logits(
+            h, input_row_offsets, return_n_logits, signal_buffers
         )

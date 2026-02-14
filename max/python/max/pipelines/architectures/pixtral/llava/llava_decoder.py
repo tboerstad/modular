@@ -23,10 +23,10 @@ from max.nn.legacy.layer import Layer, LayerList, Module
 from max.nn.legacy.linear import Linear
 from max.nn.legacy.rotary_embedding import RotaryEmbedding
 from max.nn.legacy.transformer import ReturnLogits, TransformerBlock
-from max.nn.legacy.transformer.transformer import logits_postprocess
+from max.nn.legacy.transformer.transformer import LogitsPostprocessMixin
 
 
-class Transformer(Module):
+class Transformer(LogitsPostprocessMixin, Module):
     """Transformer model consisting for TransformerBlock layers.
 
     The differences between this transformer and the transformer in nn:
@@ -92,11 +92,4 @@ class Transformer(Module):
                 input_row_offsets=input_row_offsets,
             )
 
-        return logits_postprocess(
-            h,
-            input_row_offsets,
-            return_n_logits,
-            norm=self.norm,
-            lm_head=self.lm_head,
-            return_logits=self.return_logits,
-        )
+        return self._postprocess_logits(h, input_row_offsets, return_n_logits)

@@ -43,7 +43,7 @@ from max.nn.legacy.norm import RMSNorm
 from max.nn.legacy.rotary_embedding import Llama3RotaryEmbedding
 from max.nn.legacy.transformer import ReturnLogits
 from max.nn.legacy.transformer.distributed_transformer import (
-    distributed_logits_postprocess,
+    DistributedLogitsPostprocessMixin,
     forward_sharded_layers,
 )
 from max.pipelines.architectures.qwen3.layers.attention import Qwen3Attention
@@ -218,7 +218,7 @@ class Qwen3TransformerBlock(Module):
         return hs
 
 
-class Qwen3(Module):
+class Qwen3(DistributedLogitsPostprocessMixin, Module):
     """Unified Qwen3 model that supports both single and multi-GPU inference."""
 
     def __init__(self, config: Qwen3Config) -> None:
@@ -356,15 +356,8 @@ class Qwen3(Module):
                 signal_buffers,
             )
 
-        return distributed_logits_postprocess(
-            h,
-            input_row_offsets_list,
-            return_n_logits,
-            norm_shards=self.norm_shards,
-            lm_head=self.lm_head,
-            signal_buffers=signal_buffers,
-            return_logits=self.return_logits,
-            device=self.devices[0],
+        return self._postprocess_logits(
+            h, input_row_offsets_list, return_n_logits, signal_buffers
         )
 
     def input_types(

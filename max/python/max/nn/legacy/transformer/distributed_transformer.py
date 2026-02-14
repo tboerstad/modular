@@ -194,6 +194,43 @@ def distributed_logits_postprocess(
     return ret_val
 
 
+class DistributedLogitsPostprocessMixin:
+    """Mixin providing logits postprocessing for multi-device sharded models.
+
+    Requires: self.norm_shards, self.lm_head, self.return_logits, self.devices.
+    Optional: self.return_hidden_states, self.logits_scaling.
+    """
+
+    norm_shards: Sequence[Callable[[TensorValue], TensorValue]]
+    lm_head: Callable[
+        [list[TensorValue], Sequence[BufferValue]], Sequence[TensorValue]
+    ]
+    return_logits: ReturnLogits
+    devices: list[DeviceRef]
+
+    def _postprocess_logits(
+        self,
+        h: list[TensorValue],
+        input_row_offsets: list[TensorValue],
+        return_n_logits: TensorValue,
+        signal_buffers: Sequence[BufferValue],
+    ) -> tuple[TensorValue, ...]:
+        return distributed_logits_postprocess(
+            h,
+            input_row_offsets,
+            return_n_logits,
+            norm_shards=self.norm_shards,
+            lm_head=self.lm_head,
+            signal_buffers=signal_buffers,
+            return_logits=self.return_logits,
+            device=self.devices[0],
+            return_hidden_states=getattr(
+                self, "return_hidden_states", ReturnHiddenStates.NONE
+            ),
+            logits_scaling=getattr(self, "logits_scaling", 1.0),
+        )
+
+
 class DistributedTransformerBlock(Module):
     """Stack of Attention, FeedForward, and RMSNorm layers."""
 
@@ -298,7 +335,7 @@ class DistributedTransformerBlock(Module):
         return hs
 
 
-class DistributedTransformer(Module):
+class DistributedTransformer(DistributedLogitsPostprocessMixin, Module):
     """Transformer model consisting for TransformerBlock layers."""
 
     def __init__(
@@ -452,14 +489,6 @@ class DistributedTransformer(Module):
                     freqs_cis=freqs_cis,
                     input_row_offsets=input_row_offsets_,
                 )
-        return distributed_logits_postprocess(
-            h,
-            input_row_offsets_,
-            return_n_logits,
-            norm_shards=self.norm_shards,
-            lm_head=self.lm_head,
-            signal_buffers=signal_buffers,
-            return_logits=self.return_logits,
-            device=self.devices[0],
-            logits_scaling=self.logits_scaling,
+        return self._postprocess_logits(
+            h, input_row_offsets_, return_n_logits, signal_buffers
         )

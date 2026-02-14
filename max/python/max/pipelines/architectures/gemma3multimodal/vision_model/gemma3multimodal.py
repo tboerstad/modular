@@ -36,7 +36,7 @@ from max.nn.legacy.rotary_embedding import (
 )
 from max.nn.legacy.transformer import ReturnLogits
 from max.nn.legacy.transformer.distributed_transformer import (
-    distributed_logits_postprocess,
+    DistributedLogitsPostprocessMixin,
 )
 from max.pipelines.architectures.gemma3.layers.attention import Gemma3Attention
 from max.pipelines.architectures.gemma3.layers.rms_norm import Gemma3RMSNorm
@@ -58,7 +58,7 @@ from .projection import Gemma3MultiModalProjector
 logger = logging.getLogger("max.pipelines")
 
 
-class Gemma3LanguageModel(Module):
+class Gemma3LanguageModel(DistributedLogitsPostprocessMixin, Module):
     """The Gemma3 Multi-Modal model's text component, shared with Gemma3"""
 
     def __init__(self, config: Gemma3ForConditionalGenerationConfig) -> None:
@@ -217,15 +217,8 @@ class Gemma3LanguageModel(Module):
                 input_row_offsets=input_row_offsets,
             )
 
-        return distributed_logits_postprocess(
-            h,
-            list(input_row_offsets),
-            return_n_logits,
-            norm_shards=self.norm_shards,
-            lm_head=self.lm_head,
-            signal_buffers=signal_buffers,
-            return_logits=self.return_logits,
-            device=self.devices[0],
+        return self._postprocess_logits(
+            h, list(input_row_offsets), return_n_logits, signal_buffers
         )
 
 

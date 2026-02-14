@@ -49,9 +49,7 @@ from max.nn.legacy.norm import RMSNorm
 from max.nn.legacy.rotary_embedding import Llama3RotaryEmbedding
 from max.nn.legacy.transformer import ReturnLogits
 from max.nn.legacy.transformer.distributed_transformer import (
-    distributed_logits_postprocess,
-)
-from max.nn.legacy.transformer.distributed_transformer import (
+    DistributedLogitsPostprocessMixin,
     ShardableCallable,
     forward_sharded_layers,
 )
@@ -463,7 +461,7 @@ class Qwen25VLDecoderTransformerBlock(Module):
         return hs
 
 
-class Qwen25VLDecoder(Module):
+class Qwen25VLDecoder(DistributedLogitsPostprocessMixin, Module):
     """Qwen2.5VL decoder model with support for vision-language tasks.
 
     This decoder implements the Qwen2.5VL architecture with:
@@ -633,13 +631,6 @@ class Qwen25VLDecoder(Module):
                 signal_buffers=signal_buffers,
             )
 
-        return distributed_logits_postprocess(
-            h,
-            input_row_offsets,
-            return_n_logits,
-            norm_shards=self.norm_shards,
-            lm_head=self.lm_head,
-            signal_buffers=signal_buffers,
-            return_logits=self.return_logits,
-            device=self.devices[0],
+        return self._postprocess_logits(
+            h, input_row_offsets, return_n_logits, signal_buffers
         )

@@ -26,7 +26,7 @@ from max.nn import Module
 from max.nn.embedding import Embedding
 from max.nn.legacy.kv_cache import PagedCacheValues
 from max.nn.legacy.transformer import ReturnHiddenStates, ReturnLogits
-from max.nn.legacy.transformer.transformer import logits_postprocess
+from max.nn.legacy.transformer.transformer import LogitsPostprocessMixin
 from max.nn.linear import Linear
 from max.nn.norm import LayerNorm, RMSNorm
 from max.nn.sequential import ModuleList
@@ -44,7 +44,8 @@ from .model_config import Llama3Config
 
 
 class Llama3TextModel(
-    Module[[Tensor, PagedCacheValues, Tensor, Tensor], tuple[Tensor, ...]]
+    LogitsPostprocessMixin,
+    Module[[Tensor, PagedCacheValues, Tensor, Tensor], tuple[Tensor, ...]],
 ):
     """The Llama3 language model.
 
@@ -176,16 +177,7 @@ class Llama3TextModel(
                 input_row_offsets=input_row_offsets,
             )
 
-        return logits_postprocess(
-            h,
-            input_row_offsets,
-            return_n_logits,
-            norm=self.norm,
-            lm_head=self.lm_head,
-            return_logits=self.return_logits,
-            return_hidden_states=self.return_hidden_states,
-            logits_scaling=self.logits_scaling,
-        )
+        return self._postprocess_logits(h, input_row_offsets, return_n_logits)
 
 
 class Llama3(Module[..., tuple[Tensor, ...]]):

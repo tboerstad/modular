@@ -29,7 +29,7 @@ from max.nn.legacy.rotary_embedding import (
 )
 from max.nn.legacy.transformer import ReturnLogits
 from max.nn.legacy.transformer.distributed_transformer import (
-    distributed_logits_postprocess,
+    DistributedLogitsPostprocessMixin,
 )
 
 from .layers.attention import Gemma3Attention
@@ -39,7 +39,7 @@ from .layers.transformer_block import Gemma3TransformerBlock
 from .model_config import Gemma3Config
 
 
-class Gemma3TextModel(Module):
+class Gemma3TextModel(DistributedLogitsPostprocessMixin, Module):
     """The Gemma 3 language model."""
 
     def __init__(self, config: Gemma3Config) -> None:
@@ -187,15 +187,8 @@ class Gemma3TextModel(Module):
                 **kwargs,
             )
 
-        return distributed_logits_postprocess(
-            h,
-            list(input_row_offsets),
-            return_n_logits,
-            norm_shards=self.norm_shards,
-            lm_head=self.lm_head,
-            signal_buffers=signal_buffers,
-            return_logits=self.return_logits,
-            device=self.devices[0],
+        return self._postprocess_logits(
+            h, list(input_row_offsets), return_n_logits, signal_buffers
         )
 
 

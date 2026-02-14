@@ -171,10 +171,41 @@ def logits_postprocess(
     return ret_val
 
 
+class LogitsPostprocessMixin:
+    """Mixin providing logits postprocessing for single-device models.
+
+    Requires: self.norm, self.lm_head, self.return_logits.
+    Optional: self.return_hidden_states, self.logits_scaling.
+    """
+
+    norm: Callable[[TensorValue], TensorValue]
+    lm_head: Callable[[TensorValue], TensorValue]
+    return_logits: ReturnLogits
+
+    def _postprocess_logits(
+        self,
+        h: TensorValue,
+        input_row_offsets: TensorValue,
+        return_n_logits: TensorValue,
+    ) -> tuple[TensorValue, ...]:
+        return logits_postprocess(
+            h,
+            input_row_offsets,
+            return_n_logits,
+            norm=self.norm,
+            lm_head=self.lm_head,
+            return_logits=self.return_logits,
+            return_hidden_states=getattr(
+                self, "return_hidden_states", ReturnHiddenStates.NONE
+            ),
+            logits_scaling=getattr(self, "logits_scaling", 1.0),
+        )
+
+
 Block = TypeVar("Block", bound=Module, covariant=True)
 
 
-class Transformer(Module):
+class Transformer(LogitsPostprocessMixin, Module):
     """Transformer model consisting for TransformerBlock layers."""
 
     def __init__(
@@ -223,16 +254,7 @@ class Transformer(Module):
                 input_row_offsets=input_row_offsets,
             )
 
-        return logits_postprocess(
-            h,
-            input_row_offsets,
-            return_n_logits,
-            norm=self.norm,
-            lm_head=self.lm_head,
-            return_logits=self.return_logits,
-            return_hidden_states=self.return_hidden_states,
-            logits_scaling=self.logits_scaling,
-        )
+        return self._postprocess_logits(h, input_row_offsets, return_n_logits)
 
     def __call__(
         self,
