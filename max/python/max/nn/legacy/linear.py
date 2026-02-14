@@ -36,7 +36,7 @@ from max.nn.legacy.float8_config import (
     Float8ScaleGranularity,
     nvfp4_packed_k,
 )
-from max.nn.legacy.float8_ops import matmul_float4, matmul_float8
+from max.nn.legacy.float8_ops import quantized_matmul
 from max.support.math import ceildiv
 
 from .clamp import clamp
@@ -460,27 +460,14 @@ class Linear(Module, Shardable):
             )
         elif self.float8_config:
             assert self.weight_scale is not None
-            weight_scale: TensorValue = self.weight_scale
-
-            if self.float8_config.is_nvfp4:
-                assert self.input_scale is not None
-                assert self.weight_scale_2 is not None
-                res = matmul_float4(
-                    x,
-                    self.weight,
-                    weight_scale,
-                    self.input_scale,
-                    self.weight_scale_2,
-                    self.float8_config,
-                )
-            else:
-                res = matmul_float8(
-                    x,
-                    self.weight,
-                    weight_scale,
-                    self.input_scale,
-                    self.float8_config,
-                )
+            res = quantized_matmul(
+                x,
+                self.weight,
+                self.weight_scale,
+                self.float8_config,
+                input_scale=self.input_scale,
+                weight_scale_2=getattr(self, "weight_scale_2", None),
+            )
         else:
             res = x @ weight.T
 

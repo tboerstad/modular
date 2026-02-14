@@ -30,7 +30,7 @@ from max.nn.legacy.float8_config import (
     Float8Config,
     nvfp4_packed_k,
 )
-from max.nn.legacy.float8_ops import matmul_float4, matmul_float8
+from max.nn.legacy.float8_ops import quantized_matmul
 from max.support.math import ceildiv
 
 from .layer import Module, Shardable
@@ -173,9 +173,8 @@ class FatTensor(Module, Shardable):
     def __call__(self, x: TensorValue) -> TensorValue:
         """Performs quantization-aware matmul: ``x @ self.weight.T``.
 
-        Dispatches to the appropriate quantized matmul implementation
-        based on the quantization config (fp4 vs fp8, static vs dynamic
-        scaling).
+        Uses the unified :func:`quantized_matmul` code path which
+        handles both fp4 and fp8 quantization based on the config.
 
         Args:
             x: Input :obj:`TensorValue`. The last dimension must match
@@ -184,25 +183,14 @@ class FatTensor(Module, Shardable):
         Returns:
             The result of the quantization-aware matrix multiplication.
         """
-        if self.is_fp4:
-            assert self.input_scale is not None
-            assert self.weight_scale_2 is not None
-            return matmul_float4(
-                x,
-                self.weight,
-                self.weight_scale,
-                self.input_scale,
-                self.weight_scale_2,
-                self.float8_config,
-            )
-        else:
-            return matmul_float8(
-                x,
-                self.weight,
-                self.weight_scale,
-                self.input_scale,
-                self.float8_config,
-            )
+        return quantized_matmul(
+            x,
+            self.weight,
+            self.weight_scale,
+            self.float8_config,
+            input_scale=self.input_scale,
+            weight_scale_2=self.weight_scale_2,
+        )
 
     @property
     def sharding_strategy(self) -> ShardingStrategy | None:

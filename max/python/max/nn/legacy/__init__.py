@@ -41,6 +41,7 @@ from .float8_config import (
     Float8ScaleOrigin,
     Float8WeightScaleSpec,
 )
+from .float8_ops import quantized_matmul
 from .identity import Identity
 from .kv_cache import (
     KVCacheInputs,
@@ -117,6 +118,7 @@ __all__ = [
     "Float8ScaleGranularity",
     "Float8ScaleOrigin",
     "Float8WeightScaleSpec",
+    "quantized_matmul",
     "GGUFQAttentionWithRope",
     "GPTQAttentionWithRope",
     "GPTQLinear",
