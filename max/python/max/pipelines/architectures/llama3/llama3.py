@@ -26,6 +26,7 @@ from max.nn import Module
 from max.nn.embedding import Embedding
 from max.nn.legacy.kv_cache import PagedCacheValues
 from max.nn.legacy.transformer import ReturnHiddenStates, ReturnLogits
+from max.nn.legacy.transformer.transformer import LogitsPostprocessMixin
 from max.nn.linear import Linear
 from max.nn.norm import LayerNorm, RMSNorm
 from max.nn.sequential import ModuleList
@@ -43,7 +44,8 @@ from .model_config import Llama3Config
 
 
 class Llama3TextModel(
-    Module[[Tensor, PagedCacheValues, Tensor, Tensor], tuple[Tensor, ...]]
+    LogitsPostprocessMixin,
+    Module[[Tensor, PagedCacheValues, Tensor, Tensor], tuple[Tensor, ...]],
 ):
     """The Llama3 language model.
 
@@ -175,59 +177,7 @@ class Llama3TextModel(
                 input_row_offsets=input_row_offsets,
             )
 
-        # Compute logits based on return mode.
-        last_h = F.gather(h, input_row_offsets[1:] - 1, axis=0)
-        last_logits = F.cast(self.lm_head(self.norm(last_h)), DType.float32)
-        logits = None
-        offsets = None
-
-        if self.return_logits == ReturnLogits.VARIABLE:
-            return_n_logits_range = ops.range(
-                return_n_logits[0],
-                0,
-                -1,
-                out_dim="return_n_logits_range",
-                device=h.device,
-                dtype=DType.int64,
-            )
-            offsets = (
-                F.unsqueeze(input_row_offsets[1:], -1) - return_n_logits_range
-            )
-            last_indices = F.reshape(offsets, shape=(-1,))
-            last_tokens = F.gather(h, last_indices, axis=0)
-            logits = F.cast(self.lm_head(self.norm(last_tokens)), DType.float32)
-            offsets = ops.range(
-                0,
-                TensorValue(last_indices.shape[0]) + return_n_logits[0],
-                return_n_logits[0],
-                out_dim="logit_offsets",
-                device=h.device,
-                dtype=DType.int64,
-            )
-        elif self.return_logits == ReturnLogits.ALL:
-            logits = F.cast(self.lm_head(self.norm(h)), DType.float32)
-            offsets = input_row_offsets
-
-        if self.logits_scaling != 1.0:
-            last_logits = last_logits / self.logits_scaling
-            if logits is not None:
-                logits = logits / self.logits_scaling
-
-        ret_val: tuple[Tensor, ...] = (last_logits,)
-        if offsets is not None:
-            assert logits is not None
-            ret_val += (logits, offsets)
-
-        if self.return_hidden_states == ReturnHiddenStates.ALL:
-            ret_val += (h,)
-        elif self.return_hidden_states == ReturnHiddenStates.LAST:
-            ret_val += (last_h,)
-        elif self.return_hidden_states == ReturnHiddenStates.ALL_NORMALIZED:
-            ret_val += (self.norm(h),)
-        elif self.return_hidden_states == ReturnHiddenStates.LAST_NORMALIZED:
-            ret_val += (self.norm(last_h),)
-
-        return ret_val
+        return self._postprocess_logits(h, input_row_offsets, return_n_logits)
 
 
 class Llama3(Module[..., tuple[Tensor, ...]]):
