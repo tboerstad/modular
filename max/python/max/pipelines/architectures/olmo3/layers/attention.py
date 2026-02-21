@@ -45,7 +45,6 @@ class Olmo3Attention(AttentionWithRope):
         kv_params: KVCacheParams,
         layer_idx: int,
         mask_variant: MHAMaskVariant,
-        scale: float | None = None,
         has_bias: bool = False,
         local_window_size: int = 4096,
         use_qk_norm: bool = True,
@@ -63,7 +62,6 @@ class Olmo3Attention(AttentionWithRope):
             layer_idx: The layer number associated with this Attention block.
             mask_variant: The mask variant for attention
                 (causal or sliding window).
-            scale: Value used to scale the results of the attention output.
             has_bias: Whether to use an attention bias.
             local_window_size: Size of the sliding window.
             use_qk_norm: Whether to use Q and K normalization.
@@ -76,7 +74,6 @@ class Olmo3Attention(AttentionWithRope):
             hidden_size=hidden_size,
             kv_params=kv_params,
             layer_idx=layer_idx,
-            scale=scale,
             has_bias=has_bias,
             mask_variant=mask_variant,
             local_window_size=local_window_size,
