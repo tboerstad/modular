@@ -22,6 +22,10 @@ OLMO3_SAFETENSOR_MAP: dict[str, str] = {
     "model.norm.": "language_model.norm.",
     "lm_head.": "language_model.lm_head.",
     "model.layers.": "language_model.layers.",
+    # Olmo3Attention stores QK norm weights as flat tensors (q_norm_weight)
+    # rather than sub-modules (q_norm.weight).
+    "q_norm.weight": "q_norm_weight",
+    "k_norm.weight": "k_norm_weight",
 }
 
 

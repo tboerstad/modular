@@ -59,7 +59,7 @@ class Olmo3TransformerBlock(
         attn_out = self.self_attn(
             x,
             kv_collection,
-            input_row_offsets,
+            input_row_offsets=input_row_offsets,
         )
         h = residual + self.post_attention_layernorm(attn_out)
 

@@ -31,12 +31,12 @@ from max.nn.sequential import ModuleList
 from max.tensor import Tensor
 
 from ..common_layers.mlp import MLP
+from .layers.attention import Olmo3Attention
 from ..common_layers.rotary_embedding import (
     RotaryEmbedding,
     YarnRotaryEmbedding,
     YarnScalingParams,
 )
-from .layers.attention import Olmo3Attention
 from .layers.rms_norm import Olmo3RMSNorm
 from .layers.transformer_block import Olmo3TransformerBlock
 from .model_config import Olmo3Config
@@ -146,7 +146,6 @@ class Olmo3TextModel(
                         local_window_size=config.sliding_window,
                         has_bias=config.attention_bias,
                         mask_variant=mask_variant,
-                        use_qk_norm=config.use_qk_norm,
                         qk_norm_eps=config.qk_norm_eps,
                     ),
                     mlp=MLP(
