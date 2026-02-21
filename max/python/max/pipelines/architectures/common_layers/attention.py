@@ -23,7 +23,6 @@ from max.dtype import DType
 from max.nn import Linear, Module
 from max.nn.legacy.attention import MHAMaskVariant
 from max.nn.legacy.kv_cache import KVCacheParams, PagedCacheValues, uses_opaque
-from max.nn.norm import rms_norm as _rms_norm_fn
 from max.tensor import Tensor
 
 from .functional_kernels import (
@@ -43,13 +42,12 @@ class AttentionWithRope(Module[..., Tensor]):
     optional QK normalization via RMSNorm, configurable attention masks, sliding
     window attention, and attention sinks.
 
-    QK normalization can operate in two modes controlled by ``per_head_norm``:
+    Subclasses can override the following hook methods to customize behavior:
 
-    - **Per-head** (default): norm weights have shape ``[head_dim]`` and
-      normalization is applied independently to each head.
-    - **Full-dimension**: norm weights have shape ``[q_weight_dim]`` /
-      ``[kv_weight_dim]`` and normalization spans all heads jointly.
-      This mode is used by architectures like OLMo3.
+    - ``_init_qk_norm``: Controls how QK norm weights/modules are created.
+    - ``_apply_q_norm``: Controls how Q normalization is applied.
+    - ``_apply_k_norm_to_cache``: Controls how K normalization is applied
+      to the KV cache.
     """
 
     def __init__(
@@ -67,8 +65,6 @@ class AttentionWithRope(Module[..., Tensor]):
         clip_qkv: float | None = None,
         use_qk_norm: bool = False,
         rms_norm_eps: float = 1e-6,
-        per_head_norm: bool = True,
-        multiply_before_cast: bool = False,
         mask_variant: MHAMaskVariant = MHAMaskVariant.CAUSAL_MASK,
         local_window_size: int = 0,
         use_sinks: bool = False,
@@ -91,13 +87,6 @@ class AttentionWithRope(Module[..., Tensor]):
                 ``[-clip_qkv, clip_qkv]``.
             use_qk_norm: Whether to use RMSNorm on Q/K.
             rms_norm_eps: Value to use for numerical stability in RMSNorm.
-            per_head_norm: When True, QK norm weights have shape [head_dim]
-                and normalization is applied per head. When False, weights
-                span the full projection dimension and normalization is
-                applied across all heads jointly (e.g., OLMo3 style).
-            multiply_before_cast: Whether to multiply by gamma before casting
-                back to the original dtype. Used by some architectures
-                (e.g., OLMo3, Gemma) for numerical stability.
             mask_variant: Attention mask type (causal, sliding window, etc.).
             local_window_size: Size of the sliding window for local attention.
                 Only used when mask_variant is SLIDING_WINDOW_CAUSAL_MASK.
@@ -124,8 +113,6 @@ class AttentionWithRope(Module[..., Tensor]):
         self.stacked_qkv = stacked_qkv
         self.use_qk_norm = use_qk_norm
         self.rms_norm_eps = rms_norm_eps
-        self.per_head_norm = per_head_norm
-        self.multiply_before_cast = multiply_before_cast
         self.mask_variant = mask_variant
         self.local_window_size = local_window_size
         self.use_sinks = use_sinks
@@ -185,15 +172,11 @@ class AttentionWithRope(Module[..., Tensor]):
     def _init_qk_norm(self) -> None:
         """Initialize QK normalization weights.
 
-        Creates weights sized for per-head or full-dimension normalization
-        depending on ``self.per_head_norm``.
+        Override this method to use a different normalization scheme (e.g.,
+        full-dimension RMSNorm instead of per-head RMSNorm).
         """
-        if self.per_head_norm:
-            self.q_norm_weight = Tensor.ones([self.kv_params.head_dim])
-            self.k_norm_weight = Tensor.ones([self.kv_params.head_dim])
-        else:
-            self.q_norm_weight = Tensor.ones([self.q_weight_dim])
-            self.k_norm_weight = Tensor.ones([self.kv_weight_dim])
+        self.q_norm_weight = Tensor.ones([self.kv_params.head_dim])
+        self.k_norm_weight = Tensor.ones([self.kv_params.head_dim])
 
     def _apply_q_norm(self, xq: Tensor) -> Tensor:
         """Apply normalization to Q.
@@ -204,29 +187,10 @@ class AttentionWithRope(Module[..., Tensor]):
         Returns:
             Normalized query tensor of the same shape.
         """
-        if self.per_head_norm:
-            q_gamma = F.cast(self.q_norm_weight.to(xq.device), xq.dtype)
-            eps_q = F.constant(
-                self.rms_norm_eps, xq.dtype, device=xq.device
-            )
-            inv_rms = F.rsqrt(F.mean(xq * xq, axis=-1) + eps_q)
-            return (xq * inv_rms) * q_gamma
-
-        # Full-dimension RMSNorm: reshape to [seq, q_dim], norm, reshape back.
-        total_seq_len = xq.shape[0]
-        q = xq.reshape(
-            (total_seq_len, self.n_heads * self.kv_params.head_dim)
-        )
-        q = _rms_norm_fn(
-            q,
-            self.q_norm_weight.to(xq.device),
-            self.rms_norm_eps,
-            weight_offset=0.0,
-            multiply_before_cast=self.multiply_before_cast,
-        )
-        return q.reshape(
-            (total_seq_len, self.n_heads, self.kv_params.head_dim)
-        )
+        q_gamma = F.cast(self.q_norm_weight.to(xq.device), xq.dtype)
+        eps_q = F.constant(self.rms_norm_eps, xq.dtype, device=xq.device)
+        inv_rms = F.rsqrt(F.mean(xq * xq, axis=-1) + eps_q)
+        return (xq * inv_rms) * q_gamma
 
     def _apply_k_norm_to_cache(
         self,
@@ -245,10 +209,6 @@ class AttentionWithRope(Module[..., Tensor]):
             input_row_offsets: Ragged offsets for batched sequences.
             device: Device to place the gamma tensor on.
         """
-        cache_kwargs: dict = {}
-        if not self.per_head_norm:
-            cache_kwargs["per_head_norm"] = False
-
         rms_norm_key_cache(
             kv_params=self.kv_params,
             kv_collection=kv_collection,
@@ -258,7 +218,6 @@ class AttentionWithRope(Module[..., Tensor]):
             total_seq_len=total_seq_len,
             input_row_offsets=input_row_offsets,
             weight_offset=0.0,
-            **cache_kwargs,
         )
 
     @property

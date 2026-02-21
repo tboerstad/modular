@@ -16,10 +16,13 @@
 from __future__ import annotations
 
 from max.nn.legacy.attention import MHAMaskVariant
-from max.nn.legacy.kv_cache import KVCacheParams
+from max.nn.legacy.kv_cache import KVCacheParams, PagedCacheValues
+from max.tensor import Tensor
 
 from ...common_layers.attention import AttentionWithRope
+from ...common_layers.functional_kernels import rms_norm_key_cache
 from ...common_layers.rotary_embedding import RotaryEmbedding
+from .rms_norm import Olmo3RMSNorm
 
 
 class Olmo3Attention(AttentionWithRope):
@@ -29,8 +32,7 @@ class Olmo3Attention(AttentionWithRope):
     attention layer or a sliding window attention layer.
 
     Olmo3 includes Q and K normalization after the Q and K projections,
-    using full-dimension RMSNorm (not per-head) with multiply-before-cast
-    semantics.
+    using full-dimension RMSNorm (not per-head).
     """
 
     def __init__(
@@ -80,7 +82,42 @@ class Olmo3Attention(AttentionWithRope):
             local_window_size=local_window_size,
             use_qk_norm=use_qk_norm,
             rms_norm_eps=qk_norm_eps,
-            per_head_norm=False,
-            multiply_before_cast=True,
             o_proj_has_bias=has_bias,
+        )
+
+    def _init_qk_norm(self) -> None:
+        """Olmo3 uses full-dimension RMSNorm (not per-head)."""
+        self.q_norm = Olmo3RMSNorm(self.q_weight_dim, self.rms_norm_eps)
+        self.k_norm = Olmo3RMSNorm(self.kv_weight_dim, self.rms_norm_eps)
+
+    def _apply_q_norm(self, xq: Tensor) -> Tensor:
+        """Apply full-dimension RMSNorm to Q, then reshape back to per-head."""
+        total_seq_len = xq.shape[0]
+        q = xq.reshape(
+            (total_seq_len, self.n_heads * self.kv_params.head_dim)
+        )
+        q = self.q_norm(q)
+        return q.reshape(
+            (total_seq_len, self.n_heads, self.kv_params.head_dim)
+        )
+
+    def _apply_k_norm_to_cache(
+        self,
+        kv_collection: PagedCacheValues,
+        layer_idx: Tensor,
+        total_seq_len: int,
+        input_row_offsets: Tensor,
+        device,
+    ) -> None:
+        """Apply full-dimension RMSNorm to K in the KV cache."""
+        rms_norm_key_cache(
+            self.kv_params,
+            kv_collection=kv_collection,
+            gamma=self.k_norm.weight.cast(self.kv_params.dtype).to(device),
+            epsilon=self.rms_norm_eps,
+            layer_idx=layer_idx,
+            total_seq_len=total_seq_len,
+            input_row_offsets=input_row_offsets,
+            weight_offset=0.0,
+            per_head_norm=False,
         )
