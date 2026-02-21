@@ -11,6 +11,7 @@
 # limitations under the License.
 # ===----------------------------------------------------------------------=== #
 
+from ...common_layers.attention import AttentionWithRope
 from ...common_layers.mlp import MLP
 from ...common_layers.rotary_embedding import (
     YarnRotaryEmbedding,
@@ -21,6 +22,7 @@ from .rms_norm import Olmo3RMSNorm
 from .transformer_block import Olmo3TransformerBlock
 
 __all__ = [
+    "AttentionWithRope",
     "MLP",
     "Olmo3Attention",
     "Olmo3RMSNorm",
