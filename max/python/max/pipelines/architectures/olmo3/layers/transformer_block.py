@@ -20,8 +20,8 @@ from max.nn.legacy.kv_cache import PagedCacheValues
 from max.nn.norm import RMSNorm
 from max.tensor import Tensor
 
-from ...common_layers.attention import AttentionWithRope
 from ...common_layers.mlp import MLP
+from .attention import Olmo3Attention
 
 
 class Olmo3TransformerBlock(
@@ -34,7 +34,7 @@ class Olmo3TransformerBlock(
 
     def __init__(
         self,
-        attention: AttentionWithRope,
+        attention: Olmo3Attention,
         mlp: MLP,
         post_attention_layernorm: RMSNorm,
         post_feedforward_layernorm: RMSNorm,

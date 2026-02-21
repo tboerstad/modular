@@ -56,10 +56,7 @@ class AttentionWithRope(Module[..., Tensor]):
         stacked_qkv: bool = False,
         clip_qkv: float | None = None,
         use_qk_norm: bool = False,
-        qk_norm_full_dim: bool = False,
         rms_norm_eps: float = 1e-6,
-        mask_variant: MHAMaskVariant = MHAMaskVariant.CAUSAL_MASK,
-        local_window_size: int = 4096,
     ) -> None:
         """Initializes the attention layer.
 
@@ -77,12 +74,7 @@ class AttentionWithRope(Module[..., Tensor]):
             clip_qkv: If provided, clamp Q/K/V weights to
                 ``[-clip_qkv, clip_qkv]``.
             use_qk_norm: Whether to use RMSNorm on Q/K.
-            qk_norm_full_dim: When True, apply QK normalization across the full
-                projection dimension (num_heads * head_dim) rather than
-                per-head. Used by OLMo-style models.
             rms_norm_eps: Value to use for numerical stability in RMSNorm.
-            mask_variant: Attention mask variant to use. Defaults to causal.
-            local_window_size: Window size for sliding window attention.
         """
         super().__init__()
         self.rope = rope
@@ -100,10 +92,7 @@ class AttentionWithRope(Module[..., Tensor]):
         self.clip_qkv = clip_qkv
         self.stacked_qkv = stacked_qkv
         self.use_qk_norm = use_qk_norm
-        self.qk_norm_full_dim = qk_norm_full_dim
         self.rms_norm_eps = rms_norm_eps
-        self.mask_variant = mask_variant
-        self.local_window_size = local_window_size
 
         if stacked_qkv and clip_qkv:
             raise ValueError(
@@ -151,14 +140,8 @@ class AttentionWithRope(Module[..., Tensor]):
         )
 
         if self.use_qk_norm:
-            if self.qk_norm_full_dim:
-                # Full-dimension norm: gamma spans all heads.
-                self.q_norm_weight = Tensor.ones([q_weight_dim])
-                self.k_norm_weight = Tensor.ones([kv_weight_dim])
-            else:
-                # Per-head norm: gamma spans a single head.
-                self.q_norm_weight = Tensor.ones([self.kv_params.head_dim])
-                self.k_norm_weight = Tensor.ones([self.kv_params.head_dim])
+            self.q_norm_weight = Tensor.ones([self.kv_params.head_dim])
+            self.k_norm_weight = Tensor.ones([self.kv_params.head_dim])
 
     @property
     def wqkv(self) -> Tensor:
@@ -196,7 +179,6 @@ class AttentionWithRope(Module[..., Tensor]):
         **kwargs,
     ) -> Tensor:
         total_seq_len = x.shape[0]
-        input_row_offsets = kwargs["input_row_offsets"]
 
         layer_idx = F.constant(self.layer_idx, DType.uint32, device=CPU())
 
@@ -206,23 +188,17 @@ class AttentionWithRope(Module[..., Tensor]):
             input=x,
             wqkv=wqkv,
             bias=self.wqkv_bias,
-            input_row_offsets=input_row_offsets,
+            input_row_offsets=kwargs["input_row_offsets"],
             kv_collection=kv_collection,
             layer_idx=layer_idx,
             n_heads=self.n_heads,
         )
 
-        if self.use_qk_norm and self.qk_norm_full_dim:
-            # Full-dimension QK norm: normalize across all heads together.
-            xq = xq.reshape(
-                (-1, self.n_heads * self.kv_params.head_dim)
-            )
-            q_gamma = F.cast(self.q_norm_weight.to(xq.device), xq.dtype)
-            eps_q = F.constant(self.rms_norm_eps, xq.dtype, device=xq.device)
-            inv_rms = F.rsqrt(F.mean(xq * xq, axis=-1) + eps_q)
-            xq = (xq * inv_rms) * q_gamma
-            xq = xq.reshape((-1, self.n_heads, self.kv_params.head_dim))
+        xq = xq.reshape((-1, self.n_heads, self.kv_params.head_dim))
 
+        if self.use_qk_norm:
+            # Normalize new K entries in-place inside the KV cache.
+            # Per-head RMSNorm across head_dim, gamma size = [head_dim].
             rms_norm_key_cache(
                 kv_params=self.kv_params,
                 kv_collection=kv_collection,
@@ -232,41 +208,22 @@ class AttentionWithRope(Module[..., Tensor]):
                 epsilon=self.rms_norm_eps,
                 layer_idx=layer_idx,
                 total_seq_len=total_seq_len,
-                input_row_offsets=input_row_offsets,
+                input_row_offsets=kwargs["input_row_offsets"],
                 weight_offset=0.0,
-                per_head_norm=False,
             )
-        else:
-            xq = xq.reshape((-1, self.n_heads, self.kv_params.head_dim))
 
-            if self.use_qk_norm:
-                # Per-head QK norm: normalize each head independently.
-                rms_norm_key_cache(
-                    kv_params=self.kv_params,
-                    kv_collection=kv_collection,
-                    gamma=self.k_norm_weight.cast(self.kv_params.dtype).to(
-                        xq.device
-                    ),
-                    epsilon=self.rms_norm_eps,
-                    layer_idx=layer_idx,
-                    total_seq_len=total_seq_len,
-                    input_row_offsets=input_row_offsets,
-                    weight_offset=0.0,
-                )
-
-                q_gamma = F.cast(self.q_norm_weight.to(xq.device), xq.dtype)
-                eps_q = F.constant(
-                    self.rms_norm_eps, xq.dtype, device=xq.device
-                )
-                inv_rms = F.rsqrt(F.mean(xq * xq, axis=-1) + eps_q)
-                xq = (xq * inv_rms) * q_gamma
+            # Normalize Q per head across the last dim (head_dim).
+            q_gamma = F.cast(self.q_norm_weight.to(xq.device), xq.dtype)
+            eps_q = F.constant(self.rms_norm_eps, xq.dtype, device=xq.device)
+            inv_rms = F.rsqrt(F.mean(xq * xq, axis=-1) + eps_q)
+            xq = (xq * inv_rms) * q_gamma
 
         freqs_cis = F.cast(self.rope.freqs_cis, xq.dtype).to(xq.device)
 
         xq = fused_qk_ragged_rope(
             self.kv_params,
             xq,
-            input_row_offsets,
+            kwargs["input_row_offsets"],
             kv_collection,
             freqs_cis=freqs_cis,
             layer_idx=layer_idx,
@@ -278,10 +235,9 @@ class AttentionWithRope(Module[..., Tensor]):
             input=xq,
             kv_collection=kv_collection,
             layer_idx=layer_idx,
-            input_row_offsets=input_row_offsets,
-            mask_variant=self.mask_variant,
+            input_row_offsets=kwargs["input_row_offsets"],
+            mask_variant=MHAMaskVariant.CAUSAL_MASK,
             scale=self.scale,
-            local_window_size=self.local_window_size,
         )
         attn_out = F.reshape(attn_out, shape=[total_seq_len, self.q_weight_dim])
         return self.o_proj(attn_out)

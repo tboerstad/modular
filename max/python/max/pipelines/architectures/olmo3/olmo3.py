@@ -30,8 +30,8 @@ from max.nn.linear import Linear
 from max.nn.sequential import ModuleList
 from max.tensor import Tensor
 
-from ..common_layers.attention import AttentionWithRope
 from ..common_layers.mlp import MLP
+from .layers.attention import Olmo3Attention
 from ..common_layers.rotary_embedding import (
     RotaryEmbedding,
     YarnRotaryEmbedding,
@@ -136,7 +136,7 @@ class Olmo3TextModel(
             )
             layers.append(
                 Olmo3TransformerBlock(
-                    attention=AttentionWithRope(
+                    attention=Olmo3Attention(
                         rope=layer_rope,
                         num_attention_heads=config.num_attention_heads,
                         num_key_value_heads=config.num_key_value_heads,
@@ -146,9 +146,7 @@ class Olmo3TextModel(
                         local_window_size=config.sliding_window,
                         has_bias=config.attention_bias,
                         mask_variant=mask_variant,
-                        use_qk_norm=config.use_qk_norm,
-                        qk_norm_full_dim=True,
-                        rms_norm_eps=config.qk_norm_eps,
+                        qk_norm_eps=config.qk_norm_eps,
                     ),
                     mlp=MLP(
                         hidden_dim=config.hidden_size,
