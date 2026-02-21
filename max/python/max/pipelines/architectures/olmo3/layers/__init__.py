@@ -17,14 +17,12 @@ from ...common_layers.rotary_embedding import (
     YarnRotaryEmbedding,
     YarnScalingParams,
 )
-from .attention import Olmo3Attention
 from .rms_norm import Olmo3RMSNorm
 from .transformer_block import Olmo3TransformerBlock
 
 __all__ = [
     "AttentionWithRope",
     "MLP",
-    "Olmo3Attention",
     "Olmo3RMSNorm",
     "Olmo3TransformerBlock",
     "YarnRotaryEmbedding",
