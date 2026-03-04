@@ -533,3 +533,103 @@ def test_overlap_execution(
         # Don't check this for the other trials since we need to warmup the kernels.
         # if trial == num_trials - 1:
         #     assert error < 1.0
+
+
+def test_scatter_with_mixed_prefill_decode_ordering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that scatter correctly handles batches where prefill comes before decode.
+
+    This reproduces a bug in ScatterFutureTokenProcessor.scatter_future_tokens()
+    where scatter indices use the flat_batch position (idx_in_batch) instead of
+    the actual ragged token buffer position. When a multi-token prefill request
+    appears before single-token decode requests in the same batch, the ragged
+    positions diverge from the batch indices, causing future tokens to be
+    scattered to wrong positions.
+
+    Timeline:
+      Batch 1: [req_a(prefill 5 tok), req_b(prefill 3 tok)]
+        -> GPU generates tokens for req_a and req_b
+        -> update_with_future_token() appends FUTURE_TOKEN to each
+
+      Batch 2: [req_c(NEW prefill 7 tok), req_a(decode 1 tok), req_b(decode 1 tok)]
+        -> Ragged buffer: [c0,c1,c2,c3,c4,c5,c6, FUTURE_A, FUTURE_B]
+        -> FUTURE_A is at ragged pos 7, FUTURE_B at pos 8
+        -> BUG: scatter uses idx_in_batch (1, 2) instead of ragged pos (7, 8)
+        -> Scatter writes generated tokens to positions 1,2 (corrupting req_c's
+           prompt) while leaving positions 7,8 as FUTURE_TOKEN (-999)
+        -> Model sees -999 as last token for req_a/req_b, produces wrong output
+
+      Batch 3: Retrieves batch 2's outputs
+        -> With bug: req_a and req_b outputs are wrong (token 0 instead of 106/204)
+        -> Correct: req_a=106, req_b=204
+    """
+    monkeypatch_weight_and_kvcache_loading(monkeypatch)
+    prime_host_buffer_cache()
+    pipeline = create_overlap_pipeline(enable_overlap_scheduler=True)
+
+    # Clear pipeline state.
+    pipeline.execute(TextGenerationInputs(batches=[[]], num_steps=1))
+
+    # Batch 1: Two requests doing initial prefill.
+    # FakePipelineModel does last_token + 1, so:
+    #   req_a tokens=[100..104], last=104, predicts 105
+    #   req_b tokens=[200..202], last=202, predicts 203
+    req_a = create_context(isl=5, osl=4, offset=100)
+    req_b = create_context(isl=3, osl=4, offset=200)
+
+    batch1 = TextGenerationInputs(batches=[[req_a, req_b]], num_steps=1)
+    outputs1 = pipeline.execute(batch1)
+    assert len(outputs1) == 0, "First batch should have no outputs (no prev batch)"
+
+    # After batch 1, pipeline._prev_batch stores generated tokens [105, 203].
+    # update_with_future_token() was called, so req_a and req_b each have
+    # active=[FUTURE_TOKEN] (1 token).
+
+    # Batch 2: NEW prefill request placed BEFORE the continuing decode requests.
+    # This is the "prefill-first" ordering that triggers the scatter index bug.
+    req_c = create_context(isl=7, osl=4, offset=300)
+
+    # Critical ordering: prefill(7 tokens) BEFORE decode(1 token each).
+    # Ragged: [300,301,302,303,304,305,306, -999, -999]
+    #          ^--- req_c (7 tokens) ---^   ^a    ^b
+    # Correct scatter targets: pos 7 and 8
+    # Buggy scatter targets:   pos 1 and 2  (idx_in_batch)
+    batch2 = TextGenerationInputs(
+        batches=[[req_c, req_a, req_b]], num_steps=1
+    )
+    outputs2 = pipeline.execute(batch2)
+
+    # outputs2 has batch 1's results — these are correct regardless of the bug
+    # because batch 1 had no scatter (no prev_batch at that point).
+    assert outputs2[req_a.request_id].tokens == [105]
+    assert outputs2[req_b.request_id].tokens == [203]
+
+    # Batch 3: Retrieve batch 2's results to check scatter correctness.
+    batch3 = TextGenerationInputs(
+        batches=[[req_c, req_a, req_b]], num_steps=1
+    )
+    outputs3 = pipeline.execute(batch3)
+
+    # If scatter indices are correct (ragged positions 7, 8):
+    #   req_c: last_token=306, predicts 307
+    #   req_a: last_token=105 (correctly scattered), predicts 106
+    #   req_b: last_token=203 (correctly scattered), predicts 204
+    #
+    # If scatter indices are wrong (flat_batch positions 1, 2):
+    #   req_c: last_token=306, predicts 307 (unaffected, last tok unchanged)
+    #   req_a: last_token=-999 (FUTURE_TOKEN not replaced), wrong output
+    #   req_b: last_token=-999 (FUTURE_TOKEN not replaced), wrong output
+    assert outputs3[req_c.request_id].tokens == [307]
+    assert outputs3[req_a.request_id].tokens == [106], (
+        "Scatter index bug: used flat_batch position instead of ragged buffer "
+        "position. FUTURE_TOKEN was not replaced for req_a because the "
+        "generated token was scattered to position 1 (idx_in_batch) instead "
+        "of position 7 (ragged offset after 7-token prefill request)."
+    )
+    assert outputs3[req_b.request_id].tokens == [204], (
+        "Scatter index bug: used flat_batch position instead of ragged buffer "
+        "position. FUTURE_TOKEN was not replaced for req_b because the "
+        "generated token was scattered to position 2 (idx_in_batch) instead "
+        "of position 8 (ragged offset after 7-token prefill request)."
+    )
