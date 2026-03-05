@@ -186,6 +186,24 @@ marlin_gemm() with b_q_type=scalar_types.float4_e2m1f   [csrc/quantization/marli
 
 Works on any GPU >= SM75. Dequantizes FP4 to FP16/BF16 on-the-fly during GEMM.
 
+#### MXFP4 MoE Backends (via `Mxfp4Backend` enum)
+
+| Backend                          | Expert Implementation                | Notes                                      |
+|----------------------------------|--------------------------------------|--------------------------------------------|
+| `SM100_FI_MXFP4_MXFP8_TRTLLM`  | `TrtLlmGenExperts` / FlashInfer     | Blackwell: MXFP4 weights + MXFP8 activations |
+| `SM100_FI_MXFP4_MXFP8_CUTLASS`  | `FlashInferExperts`                  | CUTLASS-based, SM100                       |
+| `SM100_FI_MXFP4_BF16`           | `TrtLlmGenExperts`                   | MXFP4 weights + BF16 activations           |
+| `SM90_FI_MXFP4_BF16`            | `FlashInferExperts`                  | Hopper, CUTLASS SM90 path                  |
+| `MARLIN`                         | `MarlinExperts` / `BatchedMarlinExperts` | Fallback, FP4 dequant in kernel        |
+| `TRITON`                         | `OAITritonExperts`                   | OpenAI Triton via `triton_kernels`         |
+| `CK`                             | ROCm AITER `fused_moe()`            | AMD Composable Kernels                     |
+
+Notable: The `SM100_FI_MXFP4_MXFP8_TRTLLM` path dynamically quantizes BF16 activations to **MXFP8** (not MXFP4) via `flashinfer.mxfp8_quantize()`, then runs a mixed MXFP4-weight x MXFP8-activation GEMM. This is a unique mixed-precision MoE path.
+
+#### PTX Intrinsics
+
+The activation quantization kernel uses PTX intrinsic `cvt.rn.satfinite.e2m1x2.f32` to convert two FP32 values to packed E2M1 FP4 format (in `csrc/quantization/fp4/nvfp4_utils.cuh`).
+
 #### FlashInfer Backends
 
 ```
@@ -438,6 +456,7 @@ def apply(layer, x, bias):
 | **NVFP4 on pre-Blackwell**     | **Marlin dequant on-the-fly**: FP4 -> FP16/BF16 fused into GEMM. No separate dequant step. | Not explicitly supported (requires SM100+).    |
 | **MXFP4 weight-only (Marlin)** | **Marlin dequant on-the-fly**: E2M1 -> FP16/BF16 fused into GEMM. E8M0 scales converted to param dtype. | N/A (MXFP4 linear falls back to BF16 GEMM via `upcast_from_mxfp` at load time). |
 | **MXFP4 MoE (Triton)**         | Triton kernel dequants internally.            | Triton kernel dequants internally.            |
+| **MXFP4 MoE (TRT-LLM SM100)** | Activations dynamically quantized BF16 -> **MXFP8** via `flashinfer.mxfp8_quantize()`, weights stay MXFP4. Mixed MXFP4 x MXFP8 GEMM. | Same path available via FlashInfer TRT-LLM backend. |
 | **MXFP4 fallback**             | Emulation: dequant to **FP32** on GPU.        | Fallback: dequant to **BF16** at model load time (CPU-side). |
 | **MXFP4 on AMD (ROCm)**        | `quark.dq_mxfp4()` on GPU.                   | `aiter.fused_moe` with `QuantType.per_1x32`. |
 
@@ -450,6 +469,7 @@ def apply(layer, x, bias):
 | MXFP4 fallback (SGLang)        | E2M1 (FP4)      | **BF16**          | CPU, at load time  |
 | Emulation (vLLM)                | E2M1 (FP4)      | **FP32**          | GPU, at runtime    |
 | FPQuant/Qutlass (vLLM)         | E2M1 (FP4)      | **BF16** (activations stay BF16) | GPU, mixed GEMM |
+| MXFP4 MoE TRT-LLM (vLLM)     | Activations BF16 | **MXFP8** (E4M3+E8M0) | GPU, at runtime via `flashinfer.mxfp8_quantize()` |
 | Hopper CUTLASS emulation        | E2M1 (FP4)      | **FP32 -> TF32**  | GPU, CUTLASS software path |
 
 ### Key Insight
