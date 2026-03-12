@@ -13,7 +13,24 @@
 
 """High-level entrypoints for MAX pipelines."""
 
-from max.entrypoints.llm import LLM
-from max.pipelines.lib import PipelineConfig
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from max.entrypoints.llm import LLM
+    from max.pipelines.lib import PipelineConfig
 
 __all__ = ["LLM", "PipelineConfig"]
+
+
+def __getattr__(name: str) -> object:
+    if name == "LLM":
+        from max.entrypoints.llm import LLM
+
+        return LLM
+    if name == "PipelineConfig":
+        from max.pipelines.lib import PipelineConfig
+
+        return PipelineConfig
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
