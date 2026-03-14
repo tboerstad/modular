@@ -52,6 +52,7 @@ from .hf_utils import (
 )
 from .interfaces import (
     AlwaysSignalBuffersMixin,
+    LogProbabilitiesMixin,
     ModelInputs,
     ModelOutputs,
     PipelineModel,
@@ -101,6 +102,7 @@ __all__ = [
     "HuggingFaceRepo",
     "IdentityPipelineTokenizer",
     "KVCacheConfig",
+    "LogProbabilitiesMixin",
     "LoRAConfig",
     "LoRAManager",
     "LoRARequestProcessor",

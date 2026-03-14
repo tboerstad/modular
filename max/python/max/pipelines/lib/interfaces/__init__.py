@@ -22,6 +22,7 @@ from .diffusion_pipeline import DiffusionPipeline, PixelModelInputs
 from .generate import GenerateMixin
 from .pipeline_model import (
     AlwaysSignalBuffersMixin,
+    LogProbabilitiesMixin,
     ModelInputs,
     ModelOutputs,
     PipelineModel,
@@ -30,6 +31,7 @@ from .pipeline_model import (
 
 __all__ = [
     "AlwaysSignalBuffersMixin",
+    "LogProbabilitiesMixin",
     "ArchConfig",
     "ArchConfigWithAttentionKVCache",
     "ArchConfigWithKVCache",

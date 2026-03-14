@@ -32,6 +32,7 @@ from max.pipelines.lib import (
     AlwaysSignalBuffersMixin,
     CompilationTimer,
     KVCacheConfig,
+    LogProbabilitiesMixin,
     ModelInputs,
     ModelOutputs,
     PipelineConfig,
@@ -39,7 +40,6 @@ from max.pipelines.lib import (
 )
 from max.pipelines.lib.log_probabilities import (
     compute_log_probabilities_ragged,
-    log_probabilities_ragged_graph,
 )
 from max.pipelines.lib.quant import parse_quant_config
 from transformers import AutoConfig
@@ -73,7 +73,7 @@ class Gemma3Inputs(ModelInputs):
 
 
 class Gemma3Model(
-    AlwaysSignalBuffersMixin, PipelineModelWithKVCache[TextContext]
+    LogProbabilitiesMixin, AlwaysSignalBuffersMixin, PipelineModelWithKVCache[TextContext]
 ):
     """A Gemma 3 pipeline model for text generation.
 
@@ -223,13 +223,6 @@ class Gemma3Model(
         timer.done()
 
         return model
-
-    def load_logprobs_model(self, session: InferenceSession) -> Model:
-        # TODO: Perhaps 'levels' ought to be configurable.
-        graph = log_probabilities_ragged_graph(
-            DeviceRef.from_device(self.logprobs_device), levels=3
-        )
-        return session.load(graph)
 
     # For text-only models, we should be using all the weights.  This is
     # overridden for Gemma3 multi-modal.

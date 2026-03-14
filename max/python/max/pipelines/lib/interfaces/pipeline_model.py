@@ -52,6 +52,73 @@ if TYPE_CHECKING:
 logger = logging.getLogger("max.pipelines")
 
 
+class LogProbabilitiesMixin:
+    """Mixin providing standard log probability computation.
+
+    Models using this mixin must set ``self.logprobs_device`` and
+    ``self.logprobs_model`` (via ``load_logprobs_model``) during init.
+    """
+
+    logprobs_device: Device
+    """Device for log probability computation."""
+
+    return_logits: ReturnLogits
+    """Return logits mode (must be provided by the model class)."""
+
+    def load_logprobs_model(self, session: InferenceSession) -> Any:
+        """Load the log-probabilities helper model."""
+        from ..log_probabilities import log_probabilities_ragged_graph
+
+        graph = log_probabilities_ragged_graph(
+            DeviceRef.from_device(self.logprobs_device), levels=3
+        )
+        return session.load(graph)
+
+    def compute_log_probabilities(
+        self,
+        session: InferenceSession,
+        model_inputs: ModelInputs,
+        model_outputs: ModelOutputs,
+        next_tokens: Buffer,
+        batch_top_n: list[int],
+        batch_echo: list[bool],
+    ) -> list[LogProbabilities | None]:
+        """Compute log probabilities for the generated tokens."""
+        from ..log_probabilities import compute_log_probabilities_ragged
+
+        assert model_outputs.next_token_logits is not None
+        next_token_logits = model_outputs.next_token_logits
+
+        sampled_tokens = next_tokens.to_numpy()
+        tokens = model_inputs.tokens.to_numpy()  # type: ignore[union-attr]
+        input_row_offsets = model_inputs.input_row_offsets.to_numpy()  # type: ignore[union-attr]
+
+        has_full_logits = self.return_logits in (
+            ReturnLogits.ALL,
+            ReturnLogits.VARIABLE,
+        )
+
+        if any(batch_echo) and not has_full_logits:
+            raise ValueError(
+                "Log probabilities with echo=true requires enable_echo=true "
+                "in the pipeline configuration to return logits for all tokens."
+            )
+
+        logits = model_outputs.logits if has_full_logits else None
+
+        return compute_log_probabilities_ragged(
+            self.logprobs_device,
+            self.logprobs_model,
+            input_row_offsets=input_row_offsets,
+            logits=logits,
+            next_token_logits=next_token_logits,
+            tokens=tokens,
+            sampled_tokens=sampled_tokens,
+            batch_top_n=batch_top_n,
+            batch_echo=batch_echo,
+        )
+
+
 class AlwaysSignalBuffersMixin:
     """Mixin for models that always require signal buffers.
 
