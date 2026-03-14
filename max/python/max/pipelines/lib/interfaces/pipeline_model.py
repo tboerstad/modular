@@ -21,6 +21,9 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Generic
 
+import numpy as np
+import numpy.typing as npt
+
 from max.driver import (
     Buffer,
     Device,
@@ -28,7 +31,7 @@ from max.driver import (
     is_virtual_device_mode,
 )
 from max.dtype import DType
-from max.engine import InferenceSession
+from max.engine import InferenceSession, Model
 from max.graph import DeviceRef, Value
 from max.graph.weights import Weights, WeightsAdapter
 from max.interfaces import BaseContextType, LogProbabilities
@@ -45,6 +48,11 @@ from transformers import AutoConfig
 from ..config.config_enums import supported_encoding_dtype
 from ..config.kv_cache_config import KVCacheConfig
 from ..lora import LoRAManager
+
+from ..log_probabilities import (
+    compute_log_probabilities_ragged,
+    log_probabilities_ragged_graph,
+)
 
 if TYPE_CHECKING:
     from ..config import PipelineConfig
@@ -199,6 +207,14 @@ class ModelInputs:
     For data parallel models, this can be a list of Buffers where each Buffer
     contains hidden states for the sequences assigned to that device.
     """
+
+    def get_log_prob_tokens(self) -> npt.NDArray[Any]:
+        """Returns the input tokens as a numpy array for log probability computation."""
+        return self.tokens.to_numpy()  # type: ignore[attr-defined]
+
+    def get_log_prob_input_row_offsets(self) -> npt.NDArray[Any]:
+        """Returns input_row_offsets as a numpy array for log probability computation."""
+        return self.input_row_offsets.to_numpy()  # type: ignore[attr-defined]
 
     def update(self, **kwargs) -> None:
         """Updates attributes from keyword arguments (only existing, non-None)."""
@@ -519,12 +535,61 @@ class PipelineModelWithKVCache(PipelineModel[BaseContextType]):
             cache_dtype=self.pipeline_config.model.kv_cache.cache_dtype,
         )
         self.extra_kv_managers = []
+        self.logprobs_device = devices[0]
+        self.logprobs_model = self._load_logprobs_model(session)
 
     def _unflatten_kv_inputs(
         self, kv_inputs_flat: Sequence[Value[Any]]
     ) -> list[PagedCacheValues]:
         return unflatten_ragged_attention_inputs(
             kv_inputs_flat, n_devices=self.kv_params.n_devices
+        )
+
+    def _load_logprobs_model(self, session: InferenceSession) -> Model:
+        graph = log_probabilities_ragged_graph(
+            DeviceRef.from_device(self.logprobs_device), levels=3
+        )
+        return session.load(graph)
+
+    def compute_log_probabilities(
+        self,
+        session: InferenceSession,
+        model_inputs: ModelInputs,
+        model_outputs: ModelOutputs,
+        next_tokens: Buffer,
+        batch_top_n: list[int],
+        batch_echo: list[bool],
+    ) -> list[LogProbabilities | None]:
+        assert model_outputs.next_token_logits is not None
+        next_token_logits = model_outputs.next_token_logits
+
+        sampled_tokens = next_tokens.to_numpy()
+        tokens = model_inputs.get_log_prob_tokens()
+        input_row_offsets = model_inputs.get_log_prob_input_row_offsets()
+
+        has_full_logits = self.return_logits in (
+            ReturnLogits.ALL,
+            ReturnLogits.VARIABLE,
+        )
+
+        if any(batch_echo) and not has_full_logits:
+            raise ValueError(
+                "Log probabilities with echo=true requires enable_echo=true "
+                "in the pipeline configuration to return logits for all tokens."
+            )
+
+        logits = model_outputs.logits if has_full_logits else None
+
+        return compute_log_probabilities_ragged(
+            self.logprobs_device,
+            self.logprobs_model,
+            input_row_offsets=input_row_offsets,
+            logits=logits,
+            next_token_logits=next_token_logits,
+            tokens=tokens,
+            sampled_tokens=sampled_tokens,
+            batch_top_n=batch_top_n,
+            batch_echo=batch_echo,
         )
 
     # TODO(AITLIB-265): Remove this altogether from all PipelineModels.
