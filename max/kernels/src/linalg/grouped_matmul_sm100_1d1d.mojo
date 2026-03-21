@@ -23,7 +23,7 @@ from std.gpu.primitives.cluster import (
 )
 from std.gpu.host import DeviceContext, FuncAttribute
 from std.gpu.host.nvidia.tma import TensorMapSwizzle
-from std.gpu.host.info import B200, _is_sm10x_gpu
+from std.gpu.host.info import B200
 from std.gpu import block_id_in_cluster, lane_id, thread_idx
 from std.gpu import warp_id as get_warp_id
 from std.gpu.memory import (
@@ -38,8 +38,6 @@ from std.gpu.primitives.grid_controls import (
     PDLLevel,
     wait_on_dependent_grids,
 )
-from std.runtime.tracing import Trace, TraceLevel, get_safe_task_id
-from std.collections.string.string_slice import get_static_string
 from std.gpu.compute.arch.mma_nvidia_sm100 import (
     mma_arrive,
     mma_arrive_multicast,
@@ -2163,163 +2161,3 @@ def blackwell_block_scaled_tma_umma_warp_specialized_kernel[
             _ = tmem_dealloc_mbar[].arrive_cluster(block_rank_in_cluster() ^ 1)
         _ = tmem_dealloc_mbar[].arrive()
 
-
-def grouped_matmul_dynamic_scaled_nvfp4[
-    c_type: DType,
-    c_layout: Layout,
-    a_type: DType,
-    a_layout: Layout,
-    b_type: DType,
-    b_layout: Layout,
-    scales_type: DType,
-    a_scales_layout: Layout,
-    b_scales_layout: Layout,
-    group_offsets_layout: Layout,
-    group_scale_offsets_layout: Layout,
-    expert_ids_layout: Layout,
-    expert_scales_layout: Layout,
-    //,
-    transpose_b: Bool = True,
-    target: StaticString = "cpu",
-](
-    c: LayoutTensor[c_type, c_layout, MutAnyOrigin],
-    a: LayoutTensor[a_type, a_layout, MutAnyOrigin],
-    b: LayoutTensor[b_type, b_layout, MutAnyOrigin],
-    a_scales: LayoutTensor[scales_type, a_scales_layout, MutAnyOrigin],
-    b_scales: LayoutTensor[scales_type, b_scales_layout, MutAnyOrigin],
-    group_offsets: LayoutTensor[
-        DType.uint32, group_offsets_layout, MutAnyOrigin
-    ],
-    group_scale_offsets: LayoutTensor[
-        DType.uint32, group_scale_offsets_layout, MutAnyOrigin
-    ],
-    expert_ids: LayoutTensor[DType.int32, expert_ids_layout, MutAnyOrigin],
-    expert_scales: LayoutTensor[
-        DType.float32, expert_scales_layout, MutAnyOrigin
-    ],
-    num_active_experts: Int,
-    ctx: DeviceContext,
-) raises:
-    """Performs grouped matrix multiplication with NVFP4 quantization.
-
-    Computes C = A @ B^T for multiple expert groups in a Mixture of Experts
-    (MoE) layer. Inputs A and B are NVFP4 quantized (4-bit floating point),
-    packed as uint8 (2 values per byte), with float8_e4m3fn scale factors.
-    Each group of 16 elements along the K dimension shares a single scale
-    factor (1D block scaling).
-
-    Parameters:
-        c_type: The data type of the output tensor C.
-        c_layout: The memory layout of the output tensor C.
-        a_type: The data type of input tensor A. Constraints: Must be `uint8`.
-        a_layout: The memory layout of input tensor A.
-        b_type: The data type of input tensor B. Constraints: Must be `uint8`.
-        b_layout: The memory layout of input tensor B.
-        scales_type: The data type of scale factors.
-            Constraints: Must be `float8_e4m3fn`.
-        a_scales_layout: The memory layout of A's scale factors.
-        b_scales_layout: The memory layout of B's scale factors.
-        group_offsets_layout: The memory layout of the token offset indices.
-        group_scale_offsets_layout: The memory layout of the scale offset indices.
-        expert_ids_layout: The memory layout of the expert ID tensor.
-        expert_scales_layout: The memory layout of the per-expert scale tensor.
-        transpose_b: Whether B is transposed. Constraints: Must be `True`.
-        target: The target device.
-
-    Args:
-        c: The output tensor of shape (total_tokens, N).
-        a: The input tensor of shape (total_tokens, K // 2), packed NVFP4.
-        b: The weight tensor of shape (num_experts, N, K // 2), packed NVFP4.
-        a_scales: The scale factors for A in tcgen05 5D layout.
-        b_scales: The scale factors for B in tcgen05 6D layout.
-        group_offsets: The starting token index for each expert group.
-        group_scale_offsets: The starting scale index for each expert group.
-        expert_ids: The expert ID for each group.
-        expert_scales: The per-expert scaling factors applied in the epilogue.
-        num_active_experts: The number of active experts in this batch.
-        ctx: The device context for GPU execution.
-
-    Constraints:
-        - The target device must be SM100 (B200).
-    """
-    comptime assert _is_sm10x_gpu(
-        ctx.default_device_info
-    ), "Only support SM100 for grouped NVFP4 matmul"
-    comptime assert transpose_b, "Only support transpose_b = True"
-    comptime assert (
-        a_type == b_type == DType.uint8
-    ), "input A and B dtype should be uint8 for NVFP4"
-    comptime assert (
-        scales_type == NVFP4_SF_DTYPE
-    ), "scales dtype should be NVFP4_SF_DTYPE (float8_e4m3fn)"
-    if num_active_experts == 0:
-        return
-
-    @always_inline
-    @parameter
-    @__copy_capture(c, a)
-    def description_fn() -> String:
-        # fmt: off
-        return String(
-            "(gpu",
-            ";A=", c.dim(0), "x", a.dim(1), "x", a_type,
-            ";C=", c.dim(0), "x", c.dim(1), "x", c_type,
-            ";num_active_experts=", num_active_experts,
-            ";transpose_b=", transpose_b,
-            ")"
-        )
-        # fmt: on
-
-    with Trace[TraceLevel.OP, target=StaticString("gpu")](
-        get_static_string[
-            "grouped_matmul_dynamic_scaled_nvfp4_",
-            String(a_type) + "x" + String(b_type) + "_to_" + String(c_type),
-            "_scales_" + String(scales_type),
-        ](),
-        Trace[TraceLevel.OP]._get_detail_str[description_fn](),
-        task_id=get_safe_task_id(ctx),
-    ):
-        var c_tensor = c
-        var a_tensor = a
-        var b_tensor = b
-        var group_offsets_tensor = group_offsets
-        var group_scale_offsets_tensor = group_scale_offsets
-        var expert_ids_tensor = expert_ids
-        var a_scales_tensor = a_scales
-        var b_scales_tensor = b_scales
-        var expert_scales_tensor = expert_scales
-
-        comptime MMA_K = 32
-        comptime bm = 128
-        comptime bn = 128
-        comptime mma_shape = Index(bm, bn, MMA_K)
-
-        comptime matmul_config = BlockScaledMatmulConfig[
-            a_type, b_type, c_type, scales_type, scales_type, transpose_b
-        ](
-            scaling_kind=UMMAKind.KIND_MXF4NVF4,
-            cluster_shape=Index(1, 1, 1),
-            mma_shape=mma_shape,
-            block_swizzle_size=8,
-            cta_group=1,
-            AB_swapped=False,
-            k_group_size=1,
-            num_accum_pipeline_stages=2,
-        )
-
-        blackwell_block_scaled_matmul_tma_umma_warp_specialized[
-            transpose_b=transpose_b,
-            config=matmul_config,
-        ](
-            c_tensor,
-            a_tensor,
-            group_offsets_tensor,
-            group_scale_offsets_tensor,
-            b_tensor,
-            expert_ids_tensor,
-            a_scales_tensor,
-            b_scales_tensor,
-            expert_scales_tensor,
-            num_active_experts,
-            ctx,
-        )
