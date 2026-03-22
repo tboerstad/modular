@@ -1386,20 +1386,27 @@ def TopKSoftmaxSampleKernel[
 
     barrier()
 
-    # Each thread processes elements and atomically writes to shared memory.
-    for i in range(tx, d, block_size):
-        var logit = logits_row.load[width=1]((Idx[0](), Idx(i))).cast[
-            DType.float32
-        ]()
-        if Float64(logit) > pivot:
-            var exp_val = exp((logit - max_logit) / temp_val)
+    # Each thread processes vec_size elements per iteration with vectorized
+    # loads, matching the access pattern of Phase 1 for better memory
+    # throughput.
+    for i in range(ceildiv(d, block_size * vec_size)):
+        var logits_vec = SIMD[DType.float32, vec_size]()
+        if (i * block_size + tx) * vec_size < d:
+            logits_vec = logits_row.load[width=vec_size](
+                (Idx[0](), Idx(i * block_size * vec_size + tx * vec_size))
+            ).cast[DType.float32]()
 
-            # Atomically get write position and store.
-            var pos = Int(Atomic.fetch_add(s_write_idx, Int32(1)))
-            if pos < k:
-                s_vals[pos] = exp_val
-                s_idxs[pos] = i
-                thread_sum += exp_val
+        comptime for j in range(vec_size):
+            var idx = (i * block_size + tx) * vec_size + j
+            if idx < d and Float64(logits_vec[j]) > pivot:
+                var exp_val = exp((logits_vec[j] - max_logit) / temp_val)
+
+                # Atomically get write position and store.
+                var pos = Int(Atomic.fetch_add(s_write_idx, Int32(1)))
+                if pos < k:
+                    s_vals[pos] = exp_val
+                    s_idxs[pos] = idx
+                    thread_sum += exp_val
 
     var block_sum = block.sum[block_size=block_size, broadcast=True](thread_sum)
 
