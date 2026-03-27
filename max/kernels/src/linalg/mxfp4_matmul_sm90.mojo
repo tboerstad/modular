@@ -10,10 +10,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ===----------------------------------------------------------------------=== #
-"""MXFP4 matmul on H100 (SM90) via dequant-to-FP8 + FP8 GEMM.
+"""MXFP4 matmul on H100 (SM90) with fused dequant + FP8 GEMM.
 
-Dequantizes MXFP4 weights to FP8, then uses the SM90 warp-specialized FP8 GEMM.
-Activations (BF16) are cast to FP8 on-the-fly.
+Casts BF16 activations to FP8 in global memory, then runs a fused kernel
+that dequantizes MXFP4 weights directly into shared memory within the GEMM
+producer pipeline, eliminating the global memory roundtrip for weights.
 """
 
 from std.algorithm.functional import elementwise
@@ -22,8 +23,7 @@ from std.sys.info import _accelerator_arch, simd_width_of
 from layout import Coord, Idx, TileTensor, row_major
 from std.utils.index import Index, IndexList
 
-from .mxfp4_dequant import dequant_mxfp4
-from .matmul.gpu import _matmul_gpu
+from .matmul.gpu.sm90.mxfp4_fused_matmul import mxfp4_fused_gemm_sm90
 
 
 def mxfp4_matmul_sm90(
@@ -33,7 +33,10 @@ def mxfp4_matmul_sm90(
     b_scales: TileTensor,
     ctx: DeviceContext,
 ) raises:
-    """MXFP4 matmul: dequant B weights to FP8, cast A to FP8, SM90 FP8 GEMM.
+    """MXFP4 matmul: fused dequant B in smem + FP8 GEMM on SM90.
+
+    Casts BF16 activations to FP8, then runs the fused MXFP4 kernel that
+    dequantizes weights directly into shared memory during the GEMM.
 
     Args:
         c: Output [M, N] in bfloat16.
@@ -63,37 +66,21 @@ def mxfp4_matmul_sm90(
     comptime static_K = type_of(a).static_shape[1]
     comptime fp8_type = DType.float8_e4m3fn
 
-    # TODO: This implementation materializes the full FP8 weights and casted
-    # activations into global memory before dispatching the GEMM, which negates
-    # the memory bandwidth benefits of MXFP4. Replace with a fused SM90
-    # prologue that unpacks MXFP4 directly in shared memory or registers.
-
-    # Step 1: Dequantize MXFP4 weights to FP8
-    var b_fp8_buf = ctx.enqueue_create_buffer[fp8_type](static_N * static_K)
-    var b_fp8_tt = TileTensor(
-        b_fp8_buf, row_major((Idx[static_N](), Idx[static_K]()))
-    )
-
-    dequant_mxfp4(
-        ctx,
-        b_fp8_tt,
-        b_packed,
-        b_scales,
-        num_rows=static_N,
-        num_cols=static_K,
-    )
-
-    # Step 2: Cast BF16 activations to FP8
+    # Step 1: Cast BF16 activations to FP8
     var a_fp8_buf = ctx.enqueue_create_buffer[fp8_type](M * static_K)
     var a_fp8_tt = TileTensor(a_fp8_buf, row_major((Idx(M), Idx[static_K]())))
 
     _cast_bf16_to_fp8(ctx, a_fp8_tt, a, M, static_K)
 
-    # Step 3: FP8 GEMM via _matmul_gpu (handles dispatch + fallback)
-    _matmul_gpu[transpose_b=True](c, a_fp8_tt, b_fp8_tt, ctx)
+    # Step 2: Fused MXFP4 dequant + FP8 GEMM (B dequant happens in smem)
+    mxfp4_fused_gemm_sm90[
+        c_type,
+        fp8_type,
+        N=static_N,
+        K=static_K,
+    ](c, a_fp8_tt, b_packed, b_scales, ctx)
 
-    # Keep temp buffers alive through async GEMM enqueue.
-    _ = b_fp8_buf^
+    # Keep temp buffer alive through async kernel enqueue.
     _ = a_fp8_buf^
 
 
