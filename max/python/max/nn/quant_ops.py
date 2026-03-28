@@ -10,6 +10,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ===----------------------------------------------------------------------=== #
+"""Quantized matmul operations.
+
+The main entry point is :func:`scaled_matmul`, which dispatches on the
+concrete :class:`ScaledTensor` subtype to the right kernel.
+"""
 
 from max.dtype import DType
 from max.graph import DeviceRef, TensorValue
@@ -17,48 +22,25 @@ from max.graph import DeviceRef, TensorValue
 from .kernels import (
     _fused_qkv_ragged_matmul_scaled_float8,
     block_scales_interleave,
-    convert_weights_to_fp8_fnuz_if_needed,
     dynamic_block_scaled_matmul_fp4,
     dynamic_scaled_matmul,
     grouped_dynamic_scaled_fp8_matmul,
     grouped_matmul_ragged,
-    matmul_static_scaled_float8,
     mxfp4_dequant,
-    quantize_dynamic_block_scaled_fp4,
     quantize_dynamic_scaled_float8,
-    quantize_static_scaled_float8,
 )
 from .kv_cache import KVCacheParams, PagedCacheValues
-from .scaled_tensors import Float8Tensor, Nvfp4Tensor
-from .quant_config import QuantConfig, QuantFormat
+from .quant_config import QuantConfig
+from .scaled_tensors import Float8Tensor, Mxfp4Tensor, Nvfp4Tensor, ScaledTensor
 
 
-def quantize_to_nvfp4(
-    x: TensorValue,
-    input_scale: TensorValue,
-) -> Nvfp4Tensor:
-    """Dynamically quantize a bf16 tensor to NVFP4.
-
-    Args:
-        x: The input tensor in bf16 with shape ``[M, K]``.
-        input_scale: Scalar f32 input scale factor.
-
-    Returns:
-        An :class:`Nvfp4Tensor` holding the packed data, per-block
-        scales (already interleaved), and ``input_scale`` as
-        ``global_scale``.
-    """
-    data, scale = quantize_dynamic_block_scaled_fp4(
-        x,
-        tensor_sf=1.0 / input_scale,
-        scales_type=DType.float8_e4m3fn,
-        out_type=DType.uint8,  # fp4-e2m1fnX2
-    )
-    return Nvfp4Tensor(data=data, scale=scale, global_scale=input_scale)
+# ---------------------------------------------------------------------------
+# Weight preparation
+# ---------------------------------------------------------------------------
 
 
 def prepare_nvfp4_weight(weight: Nvfp4Tensor, device: DeviceRef) -> Nvfp4Tensor:
-    """Interleave weight block scales for GPU kernel consumption.
+    """Interleave NVFP4 block scales for GPU kernel consumption.
 
     Converts the flat ``[M, K//16]`` scale layout loaded from disk into
     the 5-D interleaved layout required by the matmul kernel.
@@ -79,125 +61,61 @@ def prepare_nvfp4_weight(weight: Nvfp4Tensor, device: DeviceRef) -> Nvfp4Tensor:
     )
 
 
-def nvfp4_matmul(
-    a: Nvfp4Tensor,
-    b: Nvfp4Tensor,
+# ---------------------------------------------------------------------------
+# Dense matmul — single dispatch on weight type
+# ---------------------------------------------------------------------------
+
+
+def scaled_matmul(
+    x: TensorValue,
+    weight: ScaledTensor,
     out_type: DType = DType.bfloat16,
 ) -> TensorValue:
-    """Perform a matmul between two NVFP4 tensors.
+    """Mixed-precision matmul: ``x @ weight.T``.
 
-    Computes ``a.data @ b.data.T`` using per-block and global scales
-    from both operands.
-
-    Args:
-        a: The activation :class:`Nvfp4Tensor` (typically dynamically
-            quantized via :func:`quantize_to_nvfp4`).
-        b: The weight :class:`Nvfp4Tensor` (block scales must already
-            be interleaved via :func:`prepare_nvfp4_weight`).
-        out_type: Output dtype (default ``bfloat16``).
-
-    Returns:
-        The result tensor of shape ``[M, N]`` in ``out_type``.
-    """
-    return dynamic_block_scaled_matmul_fp4(
-        a.data,
-        b.data,
-        a.scale,
-        b.scale,
-        tensor_sf=b.global_scale * a.global_scale,
-        out_type=out_type,
-    )
-
-
-def _matmul_float8(
-    x: TensorValue,
-    weight: Float8Tensor,
-    input_scale: TensorValue | None,
-    quant_config: QuantConfig,
-) -> TensorValue:
-    """Computes x @ weight.T with float8 quantization.
+    Dispatches to the appropriate kernel based on the concrete weight
+    type.  The input ``x`` is expected to be bf16; the kernel handles
+    any necessary quantisation internally.
 
     Args:
-        x: The input tensor.
-        weight: The :class:`Float8Tensor` containing the FP8 weight and
-            its scale.
-        input_scale: The input scale tensor (only required for static
-            fp8 quantization).
-        quant_config: The quantization configuration.
+        x: Input activation tensor (typically bf16).
+        weight: Quantised weight — one of :class:`Float8Tensor`,
+            :class:`Nvfp4Tensor`, or :class:`Mxfp4Tensor`.
+        out_type: Desired output dtype (default ``bfloat16``).
 
     Returns:
-        The output tensor.
+        Result tensor of shape ``[..., N]``.
     """
-    w, w_scale = convert_weights_to_fp8_fnuz_if_needed(
-        weight.data, weight.scale
-    )
-
-    if input_scale is not None:
-        x = quantize_static_scaled_float8(x, input_scale, out_type=w.dtype)
-
-        return matmul_static_scaled_float8(x, w, input_scale, w_scale)
-    else:
-        x, x_scales = quantize_dynamic_scaled_float8(
+    if isinstance(weight, Nvfp4Tensor):
+        return dynamic_block_scaled_matmul_fp4(
             x,
-            quant_config.input_scale,
-            quant_config.weight_scale,
-            scales_type=w_scale.dtype,
-            out_type=w.dtype,
+            weight.data,
+            weight.scale,
+            weight.global_scale,
+            out_type=out_type,
         )
-        w_scale = w_scale.to(x.device)
-
+    elif isinstance(weight, Float8Tensor):
         return dynamic_scaled_matmul(
             x,
-            w,
-            x_scales,
-            w_scale,
-            quant_config.input_scale,
-            quant_config.weight_scale,
-            out_type=DType.bfloat16,
+            weight.data,
+            weight.scale,
+            out_type=out_type,
         )
+    elif isinstance(weight, Mxfp4Tensor):
+        dequanted = mxfp4_dequant(
+            weight.data, weight.scale, out_type=out_type
+        )
+        return x @ dequanted.T
+    else:
+        raise TypeError(f"Unsupported weight type: {type(weight)}")
 
 
-def quantized_matmul(
-    x: TensorValue,
-    weight: Float8Tensor,
-    quant_config: QuantConfig,
-    input_scale: TensorValue | None = None,
-) -> TensorValue:
-    """Single entry point for FP8 quantized dense matmuls.
-
-    Dispatches to the appropriate FP8 kernel based on the quantization
-    format in ``quant_config``.  For NVFP4, use :func:`quantize_to_nvfp4`,
-    :func:`prepare_nvfp4_weight`, and :func:`nvfp4_matmul` directly.
-
-    Args:
-        x: The input tensor.
-        weight: A :class:`Float8Tensor` holding the FP8 quantized weight
-            and its scales.
-        quant_config: The quantization configuration.
-        input_scale: The input scale tensor (required for static FP8).
-
-    Returns:
-        The output tensor.
-    """
-    match quant_config.format:
-        case (
-            QuantFormat.COMPRESSED_TENSORS_FP8
-            | QuantFormat.FBGEMM_FP8
-            | QuantFormat.BLOCKSCALED_FP8
-        ):
-            return _matmul_float8(
-                x,
-                weight,
-                input_scale,
-                quant_config,
-            )
-        case _:
-            raise ValueError(
-                f"Unsupported quantization format for dense matmul: {quant_config.format}"
-            )
+# ---------------------------------------------------------------------------
+# Fused QKV matmul (FP8 only — NVFP4 callers use scaled_matmul directly)
+# ---------------------------------------------------------------------------
 
 
-def quantized_fused_qkv_matmul(
+def fused_qkv_matmul(
     kv_params: KVCacheParams,
     x: TensorValue,
     weight: Float8Tensor,
@@ -206,76 +124,59 @@ def quantized_fused_qkv_matmul(
     input_row_offsets: TensorValue,
     n_heads: int,
     quant_config: QuantConfig,
-    input_scale: TensorValue | None = None,
     bias: TensorValue | None = None,
     _output_dim: int | None = None,
 ) -> TensorValue:
-    """Single entry point for quantized fused QKV matmuls (FP8 only).
+    """Fused QKV matmul + KV-cache store (FP8).
 
-    Dispatches to the appropriate FP8 fused QKV kernel based on the
-    quantization format in ``quant_config``.
+    The kernel handles input quantisation internally.
 
     Args:
         kv_params: KV cache parameters.
-        x: The input tensor of shape ``[total_seq_len, hidden_dim]``.
-        weight: A :class:`Float8Tensor` holding the FP8 concatenated
-            QKV weight and its scales.
+        x: Input tensor ``[total_seq_len, hidden_dim]`` (bf16).
+        weight: :class:`Float8Tensor` holding the concatenated QKV
+            weight and its scales.
         kv_collection: The paged KV cache.
-        layer_idx: The current layer index.
+        layer_idx: Current layer index.
         input_row_offsets: Batch boundary offsets.
         n_heads: Number of attention heads.
-        quant_config: The quantization configuration.
-        input_scale: The input scale tensor (required for static FP8).
+        quant_config: Quantisation configuration (used for scale specs).
         bias: Optional bias tensor.
-        _output_dim: Optional output dimension override for the FP8
-            kernel.
+        _output_dim: Optional output dimension override.
 
     Returns:
         The query projection output tensor.
     """
-    match quant_config.format:
-        case (
-            QuantFormat.COMPRESSED_TENSORS_FP8
-            | QuantFormat.FBGEMM_FP8
-            | QuantFormat.BLOCKSCALED_FP8
-        ):
-            # FP8 path (static or dynamic)
-            if quant_config.is_static:
-                assert input_scale is not None
-                x = quantize_static_scaled_float8(
-                    x, input_scale.to(DeviceRef.CPU())
-                )
-                x_scales = input_scale
-            else:
-                x, x_scales = quantize_dynamic_scaled_float8(
-                    x,
-                    quant_config.input_scale,
-                    quant_config.weight_scale,
-                    scales_type=weight.scale.dtype,
-                    out_type=weight.data.dtype,
-                )
+    x, x_scales = quantize_dynamic_scaled_float8(
+        x,
+        quant_config.input_scale,
+        quant_config.weight_scale,
+        scales_type=weight.scale.dtype,
+        out_type=weight.data.dtype,
+    )
 
-            return _fused_qkv_ragged_matmul_scaled_float8(
-                kv_params,
-                input=x,
-                wqkv=weight.data,
-                bias=bias,
-                input_row_offsets=input_row_offsets,
-                kv_collection=kv_collection,
-                layer_idx=layer_idx,
-                n_heads=n_heads,
-                input_scale=x_scales.to(x.device),
-                weight_scale=weight.scale.to(x.device),
-                quant_config=quant_config,
-                _output_dim=_output_dim,
-            )
-        case _:
-            raise ValueError(
-                f"Unsupported quantization format for fused QKV matmul: {quant_config.format}"
-            )
+    return _fused_qkv_ragged_matmul_scaled_float8(
+        kv_params,
+        input=x,
+        wqkv=weight.data,
+        bias=bias,
+        input_row_offsets=input_row_offsets,
+        kv_collection=kv_collection,
+        layer_idx=layer_idx,
+        n_heads=n_heads,
+        input_scale=x_scales.to(x.device),
+        weight_scale=weight.scale.to(x.device),
+        quant_config=quant_config,
+        _output_dim=_output_dim,
+    )
 
 
-def quantized_grouped_matmul(
+# ---------------------------------------------------------------------------
+# Grouped matmul (MoE)
+# ---------------------------------------------------------------------------
+
+
+def grouped_matmul(
     x: TensorValue,
     weight: TensorValue,
     weight_scale: TensorValue,
@@ -284,71 +185,59 @@ def quantized_grouped_matmul(
     usage_stats: TensorValue,
     quant_config: QuantConfig,
 ) -> TensorValue:
-    """Single entry point for quantized grouped matmuls (MoE).
+    """Grouped matmul for MoE layers.
 
-    Dispatches to the appropriate kernel based on the quantization format.
-    Handles weight dequant (MXFP4) or input quantization + transpose (FP8)
-    internally.
+    Dispatches to the MXFP4 or FP8 kernel based on ``quant_config``.
 
     Args:
-        x: The input tensor in bf16.
-        weight: The weight tensor in storage layout
-            (MXFP4: ``[E, out, in//2]``, FP8: ``[E, in, out]``).
-        weight_scale: The weight scale tensor in storage layout.
-        expert_start_indices: Starting index of each expert's token group.
+        x: Input tensor (bf16).
+        weight: Expert weight tensor ``[E, ...]``.
+        weight_scale: Expert weight scale tensor ``[E, ...]``.
+        expert_start_indices: Starting index of each expert's tokens.
         expert_ids: Expert identifier for each token group.
-        usage_stats: Per-expert usage statistics (will be moved to CPU).
-        quant_config: The quantization configuration.
+        usage_stats: Per-expert usage statistics.
+        quant_config: Quantisation configuration.
 
     Returns:
-        The grouped matmul output tensor in bf16.
+        The grouped matmul output tensor (bf16).
     """
     cpu_usage_stats = usage_stats.to(DeviceRef.CPU())
 
-    match quant_config.format:
-        case QuantFormat.MXFP4:
-            dequanted = mxfp4_dequant(
-                weight, weight_scale, out_type=DType.bfloat16
-            )
-            return grouped_matmul_ragged(
-                x,
-                dequanted,
-                expert_start_indices,
-                expert_ids,
-                cpu_usage_stats,
-            )
-        case (
-            QuantFormat.COMPRESSED_TENSORS_FP8
-            | QuantFormat.FBGEMM_FP8
-            | QuantFormat.BLOCKSCALED_FP8
-        ):
-            assert quant_config.input_scale.block_size is not None
-            input_block_size = quant_config.input_scale.block_size[1]
+    if quant_config.is_mxfp4:
+        dequanted = mxfp4_dequant(
+            weight, weight_scale, out_type=DType.bfloat16
+        )
+        return grouped_matmul_ragged(
+            x,
+            dequanted,
+            expert_start_indices,
+            expert_ids,
+            cpu_usage_stats,
+        )
+    else:
+        assert quant_config.input_scale.block_size is not None
+        input_block_size = quant_config.input_scale.block_size[1]
 
-            weight_t = weight.transpose(1, 2)
-            scale_t = weight_scale.transpose(1, 2)
+        weight_t = weight.transpose(1, 2)
+        scale_t = weight_scale.transpose(1, 2)
 
-            x_fp8, x_scales = quantize_dynamic_scaled_float8(
-                x,
-                quant_config.input_scale,
-                quant_config.weight_scale,
-                group_size_or_per_token=input_block_size,
-                out_type=weight.dtype,
-                scales_type=quant_config.weight_scale.dtype,
-            )
+        x_fp8, x_scales = quantize_dynamic_scaled_float8(
+            x,
+            quant_config.input_scale,
+            quant_config.weight_scale,
+            group_size_or_per_token=input_block_size,
+            out_type=weight.dtype,
+            scales_type=quant_config.weight_scale.dtype,
+        )
 
-            return grouped_dynamic_scaled_fp8_matmul(
-                x_fp8,
-                weight_t,
-                x_scales,
-                scale_t,
-                expert_start_indices,
-                expert_ids,
-                cpu_usage_stats,
-                quant_config.input_scale,
-                quant_config.weight_scale,
-            )
-        case _:
-            raise ValueError(
-                f"Unsupported quantization format for grouped matmul: {quant_config.format}"
-            )
+        return grouped_dynamic_scaled_fp8_matmul(
+            x_fp8,
+            weight_t,
+            x_scales,
+            scale_t,
+            expert_start_indices,
+            expert_ids,
+            cpu_usage_stats,
+            quant_config.input_scale,
+            quant_config.weight_scale,
+        )

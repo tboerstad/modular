@@ -25,8 +25,7 @@ from max.experimental.tensor import Tensor
 from max.graph import TensorValue
 from max.graph.ops import reshape
 from max.nn.scaled_tensors import Nvfp4Tensor
-from max.nn.quant_config import QuantConfig
-from max.nn.quant_ops import nvfp4_matmul, prepare_nvfp4_weight, quantize_to_nvfp4
+from max.nn.quant_ops import prepare_nvfp4_weight, scaled_matmul
 
 
 class NVFP4Linear(Module[[Tensor], Tensor]):
@@ -35,7 +34,6 @@ class NVFP4Linear(Module[[Tensor], Tensor]):
     weight: Tensor
     weight_scale: Tensor
     weight_scale_2: PinnedDeviceTensor
-    input_scale: PinnedDeviceTensor
     bias: Tensor | Literal[0]
 
     def __init__(
@@ -43,7 +41,6 @@ class NVFP4Linear(Module[[Tensor], Tensor]):
         in_dim: int,
         out_dim: int,
         *,
-        quant_config: QuantConfig,
         bias: bool = False,
     ):
         packed_k = in_dim // 2
@@ -56,11 +53,7 @@ class NVFP4Linear(Module[[Tensor], Tensor]):
         self.weight_scale_2 = Tensor.full(
             [], 1.0, dtype=DType.float32, device=CPU()
         )
-        self.input_scale = Tensor.full(
-            [], 1.0, dtype=DType.float32, device=CPU()
-        )
         self.bias = random.normal([out_dim]) if bias else 0
-        self._quant_config = quant_config
 
     def forward(self, x: Tensor) -> Tensor:
         xv = TensorValue(x)
@@ -73,8 +66,7 @@ class NVFP4Linear(Module[[Tensor], Tensor]):
             m_dim = reduce(operator.mul, leading_dims)
             xv = reshape(xv, [m_dim, k_dim])
 
-        a = quantize_to_nvfp4(xv, TensorValue(self.input_scale))
-        b = prepare_nvfp4_weight(
+        weight = prepare_nvfp4_weight(
             Nvfp4Tensor(
                 data=TensorValue(self.weight),
                 scale=TensorValue(self.weight_scale),
@@ -82,7 +74,7 @@ class NVFP4Linear(Module[[Tensor], Tensor]):
             ),
             device=xv.device,
         )
-        result_val = nvfp4_matmul(a, b)
+        result_val = scaled_matmul(xv, weight)
 
         if len(leading_dims) > 1:
             out_dim = result_val.shape[-1]

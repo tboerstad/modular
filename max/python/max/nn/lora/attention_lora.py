@@ -31,7 +31,7 @@ from ..kv_cache import (
 )
 from ..linear import Linear
 from ..scaled_tensors import Float8Tensor
-from ..quant_ops import quantized_fused_qkv_matmul
+from ..quant_ops import fused_qkv_matmul
 from ..rotary_embedding import RotaryEmbedding
 from .linear_lora import LinearLoRA, QKVLinearLoRA
 
@@ -145,7 +145,7 @@ class AttentionWithRopeAndLoRA(AttentionWithRope):
         )
 
         if self.quant_config:
-            xq_matmul = quantized_fused_qkv_matmul(
+            xq_matmul = fused_qkv_matmul(
                 kv_params=self.kv_params,
                 x=x,
                 weight=Float8Tensor(
@@ -156,7 +156,6 @@ class AttentionWithRopeAndLoRA(AttentionWithRope):
                 input_row_offsets=input_row_offsets,
                 n_heads=self.n_heads,
                 quant_config=self.quant_config,
-                input_scale=self.qkv_input_scale,
                 bias=wqkv_bias,
             )
         else:

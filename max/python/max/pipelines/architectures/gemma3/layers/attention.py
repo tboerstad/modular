@@ -38,7 +38,7 @@ from max.nn.layer import Module, Shardable
 from max.nn.linear import Linear
 from max.nn.scaled_tensors import Float8Tensor
 from max.nn.quant_config import QuantConfig
-from max.nn.quant_ops import quantized_fused_qkv_matmul
+from max.nn.quant_ops import fused_qkv_matmul
 from max.nn.rotary_embedding import Llama3RotaryEmbedding
 from max.pipelines.architectures.gemma3.layers.rms_norm import Gemma3RMSNorm
 
@@ -244,7 +244,7 @@ class Gemma3Attention(Module, Shardable):
         )
 
         if self.quant_config:
-            xq = quantized_fused_qkv_matmul(
+            xq = fused_qkv_matmul(
                 kv_params=self.kv_params,
                 x=x,
                 weight=Float8Tensor(
@@ -255,7 +255,6 @@ class Gemma3Attention(Module, Shardable):
                 input_row_offsets=kwargs["input_row_offsets"],
                 n_heads=self.n_heads,
                 quant_config=self.quant_config,
-                input_scale=self.qkv_input_scale,
                 bias=self.wqkv_bias,
             )
         else:

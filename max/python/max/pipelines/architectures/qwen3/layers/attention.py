@@ -34,7 +34,7 @@ from max.nn.linear import Linear
 from max.nn.norm import RMSNorm
 from max.nn.scaled_tensors import Float8Tensor
 from max.nn.quant_config import QuantConfig
-from max.nn.quant_ops import quantized_fused_qkv_matmul
+from max.nn.quant_ops import fused_qkv_matmul
 from max.nn.rotary_embedding import RotaryEmbedding
 
 
@@ -368,7 +368,7 @@ class Qwen3Attention(Module, Shardable):
             self.quant_config is not None
             and self.q_proj.weight.dtype.is_float8()
         ):
-            xq = quantized_fused_qkv_matmul(
+            xq = fused_qkv_matmul(
                 kv_params=self.kv_params,
                 x=x,
                 weight=Float8Tensor(

@@ -33,7 +33,7 @@ from max.nn.linear import Linear
 from max.nn.norm import RMSNorm
 from max.nn.scaled_tensors import Float8Tensor
 from max.nn.quant_config import QuantConfig
-from max.nn.quant_ops import quantized_fused_qkv_matmul
+from max.nn.quant_ops import fused_qkv_matmul
 
 from .text_rotary import Qwen3VLTextRotaryEmbedding
 
@@ -200,7 +200,7 @@ class Qwen3VLMoEDecoderAttentionWithRope(Module, Shardable):
             weight_scale = self.wqkv_scale
             assert weight_scale is not None
 
-            xq = quantized_fused_qkv_matmul(
+            xq = fused_qkv_matmul(
                 kv_params=self.kv_params,
                 x=x_in,
                 weight=Float8Tensor(data=wqkv, scale=weight_scale),

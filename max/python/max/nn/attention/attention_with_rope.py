@@ -30,7 +30,7 @@ from max.graph import (
 from max.graph.quantization import QuantizationConfig, QuantizationEncoding
 from max.graph.weight import _compute_shard_range
 from max.nn.kernels import convert_weights_to_fp8_fnuz_if_needed
-from max.nn.scaled_tensors import Float8Tensor, Nvfp4Tensor
+from max.nn.scaled_tensors import Float8Tensor, Nvfp4Tensor, ScaledTensor
 from max.nn.quant_config import QuantConfig
 
 from ..clamp import clamp
@@ -54,12 +54,7 @@ from ..no_opaque_kernels import (
     store_v_cache,
 )
 from ..norm import RMSNorm
-from ..quant_ops import (
-    nvfp4_matmul,
-    prepare_nvfp4_weight,
-    quantize_to_nvfp4,
-    quantized_matmul,
-)
+from ..quant_ops import prepare_nvfp4_weight, scaled_matmul
 from ..rotary_embedding import RotaryEmbedding
 from .interfaces import DistributedAttentionImpl
 from .mask_config import MHAMaskVariant
@@ -598,6 +593,25 @@ class AttentionWithRope(Module, Shardable):
             )
         ).reshape(())
 
+    def _build_qkv_scaled_weight(
+        self, wqkv: TensorValue
+    ) -> ScaledTensor | None:
+        """Construct the typed quantised QKV weight, or ``None`` for bf16."""
+        if not self.quant_config:
+            return None
+        if self.quant_config.is_nvfp4:
+            ws2 = self.qkv_weight_scale_2
+            assert ws2 is not None
+            return prepare_nvfp4_weight(
+                Nvfp4Tensor(
+                    data=wqkv,
+                    scale=self.qkv_weight_scale,
+                    global_scale=ws2,
+                ),
+                device=wqkv.device,
+            )
+        return Float8Tensor(data=wqkv, scale=self.qkv_weight_scale)
+
     def __call__(
         self,
         layer_idx: TensorValue,
@@ -609,36 +623,11 @@ class AttentionWithRope(Module, Shardable):
         # Get attributes from input.
         total_seq_len = x.shape[0]
 
-        # QKV matmul: graph-level weight concat via wqkv property,
-        # then a single matmul (quantized or bf16).
+        # QKV matmul.
         wqkv = self.wqkv.to(x.device)
-        if self.quant_config and self.quant_config.is_nvfp4:
-            # NVFP4: quantize input, prepare weight, matmul directly.
-            input_scale = self.qkv_input_scale
-            ws2 = self.qkv_weight_scale_2
-            assert input_scale is not None
-            assert ws2 is not None
-            a = quantize_to_nvfp4(x, input_scale)
-            b = prepare_nvfp4_weight(
-                Nvfp4Tensor(
-                    data=wqkv,
-                    scale=self.qkv_weight_scale,
-                    global_scale=ws2,
-                ),
-                device=x.device,
-            )
-            qkv = nvfp4_matmul(a, b)
-        elif self.quant_config:
-            scaled_weight = Float8Tensor(
-                data=wqkv,
-                scale=self.qkv_weight_scale,
-            )
-            qkv = quantized_matmul(
-                x,
-                scaled_weight,
-                self.quant_config,
-                input_scale=self.qkv_input_scale,
-            )
+        scaled_weight = self._build_qkv_scaled_weight(wqkv)
+        if scaled_weight is not None:
+            qkv = scaled_matmul(x, scaled_weight)
         else:
             qkv = x @ wqkv.T
             if self.wqkv_bias is not None:
