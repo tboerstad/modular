@@ -460,6 +460,17 @@ class Linear(Module, Shardable):
             )
         return Float8Tensor(data=weight, scale=ws)
 
+    @property
+    def scaled_weight(self) -> ScaledTensor | None:
+        """The quantised weight as a typed :class:`ScaledTensor`, or ``None``
+        for unquantised layers.
+
+        Returns a :class:`Float8Tensor` for FP8 or an :class:`Nvfp4Tensor`
+        (with interleaved scales) for NVFP4.  The underlying ``Weight``
+        objects are bound directly — no copies.
+        """
+        return self._build_scaled_weight(self.weight)
+
     def __call__(self, x: TensorValue) -> TensorValue:
         """Applies a linear transformation to the input data.
 
@@ -884,17 +895,6 @@ class MLP(Module, Shardable):
             self.gate_proj.bias, self.up_proj.bias
         )
 
-    def _concat_or_max_gate_up_input_scale(self) -> TensorValue | None:
-        """Gets the max input scale of the gate and up projection."""
-        return self._concat_or_max_gate_up_tensors(
-            self.gate_proj.input_scale, self.up_proj.input_scale
-        )
-
-    def _concat_or_max_gate_up_weight_scale_2(self) -> TensorValue | None:
-        """Gets the max weight scale 2 of the gate and up projection."""
-        return self._concat_or_max_gate_up_tensors(
-            self.gate_proj.weight_scale_2, self.up_proj.weight_scale_2
-        )
 
     def _can_used_fused_mlp(self) -> bool:
         """Checks if the gate/up matmuls can be fused."""

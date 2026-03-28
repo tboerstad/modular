@@ -182,26 +182,6 @@ class Gemma3Attention(Module, Shardable):
         )
 
     @property
-    def qkv_input_scale(self) -> TensorValue | None:
-        """The max of q, k, and v scale input vectors."""
-        if not self.quant_config or self.quant_config.is_dynamic:
-            return None
-
-        assert self.q_proj.input_scale is not None
-        assert self.k_proj.input_scale is not None
-        assert self.v_proj.input_scale is not None
-
-        return ops.max(
-            ops.concat(
-                (
-                    self.q_proj.input_scale.reshape((1,)),
-                    self.k_proj.input_scale.reshape((1,)),
-                    self.v_proj.input_scale.reshape((1,)),
-                )
-            )
-        ).reshape(())
-
-    @property
     def qkv_weight_scale(self) -> TensorValue:
         """The max of q, k, and v scale weight vectors."""
         assert self.quant_config

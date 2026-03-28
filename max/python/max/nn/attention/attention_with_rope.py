@@ -506,31 +506,6 @@ class AttentionWithRope(Module, Shardable):
         )
 
     @property
-    def qkv_input_scale(self) -> TensorValue | None:
-        """The max of q, k, and v scale input vectors."""
-        if not self.quant_config or self.quant_config.is_dynamic:
-            return None
-
-        if self.stacked_qkv:
-            raise NotImplementedError(
-                "QKV input scale not implemented for stacked_qkv=True"
-            )
-
-        assert self.q_proj.input_scale is not None
-        assert self.k_proj.input_scale is not None
-        assert self.v_proj.input_scale is not None
-
-        return ops.max(
-            ops.concat(
-                (
-                    self.q_proj.input_scale.reshape((1,)),
-                    self.k_proj.input_scale.reshape((1,)),
-                    self.v_proj.input_scale.reshape((1,)),
-                )
-            )
-        ).reshape(())
-
-    @property
     def qkv_weight_scale(self) -> TensorValue:
         """The max of q, k, and v scale weight vectors."""
         assert self.quant_config is not None
@@ -564,53 +539,46 @@ class AttentionWithRope(Module, Shardable):
         # Static case: return a scalar max QKV weight scale.
         return ops.max(weight_scale).reshape([])
 
-    @property
-    def qkv_weight_scale_2(self) -> TensorValue | None:
-        """The max of q, k, and v scale input vectors."""
-        if (
-            not self.quant_config
-            or self.quant_config.is_dynamic
-            or not self.quant_config.is_nvfp4
-        ):
-            return None
-
-        if self.stacked_qkv:
-            raise NotImplementedError(
-                "QKV input scale not implemented for stacked_qkv=True"
-            )
-
-        assert self.q_proj.weight_scale_2 is not None
-        assert self.k_proj.weight_scale_2 is not None
-        assert self.v_proj.weight_scale_2 is not None
-
-        return ops.max(
-            ops.concat(
-                (
-                    self.q_proj.weight_scale_2.reshape((1,)),
-                    self.k_proj.weight_scale_2.reshape((1,)),
-                    self.v_proj.weight_scale_2.reshape((1,)),
-                )
-            )
-        ).reshape(())
-
     def _build_qkv_scaled_weight(
         self, wqkv: TensorValue
     ) -> ScaledTensor | None:
-        """Construct the typed quantised QKV weight, or ``None`` for bf16."""
+        """Construct the typed quantised QKV weight, or ``None`` for bf16.
+
+        Pulls ``scale`` (and ``global_scale`` for NVFP4) from the
+        per-projection :attr:`Linear.scaled_weight` and concatenates
+        them to match the fused ``wqkv`` data tensor.
+        """
         if not self.quant_config:
             return None
-        if self.quant_config.is_nvfp4:
-            ws2 = self.qkv_weight_scale_2
-            assert ws2 is not None
+
+        q_sw = self.q_proj.scaled_weight
+        k_sw = self.k_proj.scaled_weight
+        v_sw = self.v_proj.scaled_weight
+        assert q_sw is not None and k_sw is not None and v_sw is not None
+
+        if isinstance(q_sw, Nvfp4Tensor):
+            assert isinstance(k_sw, Nvfp4Tensor) and isinstance(
+                v_sw, Nvfp4Tensor
+            )
+            # Concat scales, take max of global_scale.
+            qkv_scale = self.qkv_weight_scale
+            gs = ops.max(
+                ops.concat(
+                    (
+                        q_sw.global_scale.reshape((1,)),
+                        k_sw.global_scale.reshape((1,)),
+                        v_sw.global_scale.reshape((1,)),
+                    )
+                )
+            ).reshape(())
             return prepare_nvfp4_weight(
-                Nvfp4Tensor(
-                    data=wqkv,
-                    scale=self.qkv_weight_scale,
-                    global_scale=ws2,
-                ),
+                Nvfp4Tensor(data=wqkv, scale=qkv_scale, global_scale=gs),
                 device=wqkv.device,
             )
-        return Float8Tensor(data=wqkv, scale=self.qkv_weight_scale)
+        else:
+            return Float8Tensor(
+                data=wqkv, scale=self.qkv_weight_scale
+            )
 
     def __call__(
         self,
