@@ -28,7 +28,7 @@ from ..kernels import (
     quantize_dynamic_block_scaled_fp4,
     quantize_dynamic_scaled_float8,
 )
-from ..nvfp4_tensor import Nvfp4Tensor
+from ..scaled_tensors import Nvfp4Tensor
 from ..quant_config import QuantConfig
 
 

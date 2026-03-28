@@ -56,7 +56,7 @@ from .linear import MLP, ColumnParallelLinear, GPTQLinear, Linear
 from .lora import AttentionWithRopeAndLoRA, LinearLoRA, SupportsLoRA
 from .moe import MoE, MoEGate, MoEQuantized
 from .norm import ConstantLayerNorm, GroupNorm, LayerNorm, RMSNorm
-from .nvfp4_tensor import Nvfp4Tensor, ScaledTensor
+from .scaled_tensors import Float8Tensor, Mxfp4Tensor, Nvfp4Tensor, ScaledTensor
 from .quant_config import (
     InputScaleSpec,
     QuantConfig,
@@ -134,6 +134,8 @@ __all__ = [
     "Module",
     "MultiheadAttention",
     "Nvfp4Tensor",
+    "Float8Tensor",
+    "Mxfp4Tensor",
     "PagedCacheValues",
     "QuantConfig",
     "QuantFormat",

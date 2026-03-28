@@ -29,7 +29,7 @@ from .kernels import (
     quantize_static_scaled_float8,
 )
 from .kv_cache import KVCacheParams, PagedCacheValues
-from .nvfp4_tensor import Nvfp4Tensor, ScaledTensor
+from .scaled_tensors import Float8Tensor, Nvfp4Tensor
 from .quant_config import QuantConfig, QuantFormat
 
 
@@ -111,7 +111,7 @@ def nvfp4_matmul(
 
 def _matmul_float8(
     x: TensorValue,
-    weight: ScaledTensor,
+    weight: Float8Tensor,
     input_scale: TensorValue | None,
     quant_config: QuantConfig,
 ) -> TensorValue:
@@ -119,7 +119,7 @@ def _matmul_float8(
 
     Args:
         x: The input tensor.
-        weight: The :class:`ScaledTensor` containing the FP8 weight and
+        weight: The :class:`Float8Tensor` containing the FP8 weight and
             its scale.
         input_scale: The input scale tensor (only required for static
             fp8 quantization).
@@ -159,7 +159,7 @@ def _matmul_float8(
 
 def quantized_matmul(
     x: TensorValue,
-    weight: ScaledTensor,
+    weight: Float8Tensor,
     quant_config: QuantConfig,
     input_scale: TensorValue | None = None,
 ) -> TensorValue:
@@ -171,7 +171,7 @@ def quantized_matmul(
 
     Args:
         x: The input tensor.
-        weight: A :class:`ScaledTensor` holding the FP8 quantized weight
+        weight: A :class:`Float8Tensor` holding the FP8 quantized weight
             and its scales.
         quant_config: The quantization configuration.
         input_scale: The input scale tensor (required for static FP8).
@@ -200,7 +200,7 @@ def quantized_matmul(
 def quantized_fused_qkv_matmul(
     kv_params: KVCacheParams,
     x: TensorValue,
-    weight: ScaledTensor,
+    weight: Float8Tensor,
     kv_collection: PagedCacheValues,
     layer_idx: TensorValue,
     input_row_offsets: TensorValue,
@@ -218,7 +218,7 @@ def quantized_fused_qkv_matmul(
     Args:
         kv_params: KV cache parameters.
         x: The input tensor of shape ``[total_seq_len, hidden_dim]``.
-        weight: A :class:`ScaledTensor` holding the FP8 concatenated
+        weight: A :class:`Float8Tensor` holding the FP8 concatenated
             QKV weight and its scales.
         kv_collection: The paged KV cache.
         layer_idx: The current layer index.

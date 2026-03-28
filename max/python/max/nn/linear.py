@@ -30,7 +30,7 @@ from max.graph import (
     ops,
 )
 from max.graph.quantization import QuantizationConfig, QuantizationEncoding
-from max.nn.nvfp4_tensor import Nvfp4Tensor, ScaledTensor
+from max.nn.scaled_tensors import Float8Tensor, Nvfp4Tensor
 from max.nn.quant_config import (
     QuantConfig,
     ScaleGranularity,
@@ -486,9 +486,9 @@ class Linear(Module, Shardable):
             )
             res = nvfp4_matmul(a, b)
         else:
-            scaled_weight: ScaledTensor | None = None
+            scaled_weight: Float8Tensor | None = None
             if self.quant_config is not None and self.weight_scale is not None:
-                scaled_weight = ScaledTensor(
+                scaled_weight = Float8Tensor(
                     data=weight, scale=TensorValue(self.weight_scale)
                 )
 
@@ -512,7 +512,7 @@ def linear(
     quantization_encoding: QuantizationEncoding | None = None,
     quant_config: QuantConfig | None = None,
     input_scale: TensorValue | None = None,
-    scaled_weight: ScaledTensor | None = None,
+    scaled_weight: Float8Tensor | None = None,
 ) -> TensorValue:
     """Computes x @ weight.T with quantization support (FP8 path).
 
@@ -525,7 +525,7 @@ def linear(
         quantization_encoding: Optional GGUF/GPTQ quantization encoding.
         quant_config: Quantization configuration for FP8.
         input_scale: Input scale tensor (static FP8 only).
-        scaled_weight: A :class:`ScaledTensor` holding the FP8 weight
+        scaled_weight: A :class:`Float8Tensor` holding the FP8 weight
             and its scales.
     """
     if quantization_encoding is not None:
@@ -954,9 +954,9 @@ class MLP(Module, Shardable):
             # gate and up projection weights.
             fused_weight = self._concat_or_max_gate_up_weights()
             fused_scale = self._concat_or_max_gate_up_scales()
-            scaled_weight: ScaledTensor | None = None
+            scaled_weight: Float8Tensor | None = None
             if self.quant_config is not None and fused_scale is not None:
-                scaled_weight = ScaledTensor(
+                scaled_weight = Float8Tensor(
                     data=fused_weight, scale=fused_scale
                 )
             output = linear(

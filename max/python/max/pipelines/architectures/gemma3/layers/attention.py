@@ -36,7 +36,7 @@ from max.nn.kernels import (
 from max.nn.kv_cache import KVCacheParams, PagedCacheValues
 from max.nn.layer import Module, Shardable
 from max.nn.linear import Linear
-from max.nn.nvfp4_tensor import ScaledTensor
+from max.nn.scaled_tensors import Float8Tensor
 from max.nn.quant_config import QuantConfig
 from max.nn.quant_ops import quantized_fused_qkv_matmul
 from max.nn.rotary_embedding import Llama3RotaryEmbedding
@@ -247,7 +247,7 @@ class Gemma3Attention(Module, Shardable):
             xq = quantized_fused_qkv_matmul(
                 kv_params=self.kv_params,
                 x=x,
-                weight=ScaledTensor(
+                weight=Float8Tensor(
                     data=self.wqkv, scale=self.qkv_weight_scale
                 ),
                 kv_collection=kv_collection,

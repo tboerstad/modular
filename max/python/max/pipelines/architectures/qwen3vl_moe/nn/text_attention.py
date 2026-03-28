@@ -31,7 +31,7 @@ from max.nn.kv_cache import KVCacheParams, PagedCacheValues
 from max.nn.layer import Module, Shardable
 from max.nn.linear import Linear
 from max.nn.norm import RMSNorm
-from max.nn.nvfp4_tensor import ScaledTensor
+from max.nn.scaled_tensors import Float8Tensor
 from max.nn.quant_config import QuantConfig
 from max.nn.quant_ops import quantized_fused_qkv_matmul
 
@@ -203,7 +203,7 @@ class Qwen3VLMoEDecoderAttentionWithRope(Module, Shardable):
             xq = quantized_fused_qkv_matmul(
                 kv_params=self.kv_params,
                 x=x_in,
-                weight=ScaledTensor(data=wqkv, scale=weight_scale),
+                weight=Float8Tensor(data=wqkv, scale=weight_scale),
                 kv_collection=kv_collection,
                 layer_idx=layer_idx,
                 input_row_offsets=input_row_offsets,

@@ -30,7 +30,7 @@ from ..kv_cache import (
     PagedCacheValues,
 )
 from ..linear import Linear
-from ..nvfp4_tensor import ScaledTensor
+from ..scaled_tensors import Float8Tensor
 from ..quant_ops import quantized_fused_qkv_matmul
 from ..rotary_embedding import RotaryEmbedding
 from .linear_lora import LinearLoRA, QKVLinearLoRA
@@ -148,7 +148,7 @@ class AttentionWithRopeAndLoRA(AttentionWithRope):
             xq_matmul = quantized_fused_qkv_matmul(
                 kv_params=self.kv_params,
                 x=x,
-                weight=ScaledTensor(
+                weight=Float8Tensor(
                     data=wqkv, scale=self.qkv_weight_scale
                 ),
                 kv_collection=kv_collection,

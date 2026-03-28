@@ -10,7 +10,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ===----------------------------------------------------------------------=== #
-"""Scaled tensor representations for quantized inference."""
+"""Scaled tensor representations for quantized inference.
+
+Type hierarchy::
+
+    ScaledTensor
+    ├── Float8Tensor      # FP8 (static or dynamic, per-tensor/row/block)
+    ├── Nvfp4Tensor       # NVFP4 (packed uint8 + block scales + global scale)
+    └── Mxfp4Tensor       # MXFP4 (packed uint8 + block scales)
+"""
 
 from __future__ import annotations
 
@@ -23,19 +31,37 @@ from max.graph import TensorValue
 class ScaledTensor:
     """A tensor paired with a per-block or per-tensor scale.
 
-    This is the base representation for quantized weights.  For FP8
-    quantization the two fields are sufficient; NVFP4 extends this with
-    an additional global scale via :class:`Nvfp4Tensor`.
+    This is the abstract base representation for quantized weights.
+    Use one of the concrete subclasses (:class:`Float8Tensor`,
+    :class:`Nvfp4Tensor`, :class:`Mxfp4Tensor`) to clearly express
+    the quantization format.
 
     Attributes:
-        data: The quantized weight tensor (e.g. ``float8_e4m3fn`` for
-            FP8, ``uint8`` for packed NVFP4).
+        data: The quantized weight tensor.
         scale: Scaling factors whose granularity depends on the
             quantization scheme (scalar, row-wise, or block-wise).
     """
 
     data: TensorValue
     scale: TensorValue
+
+
+@dataclass
+class Float8Tensor(ScaledTensor):
+    """An FP8 quantized tensor with per-tensor, per-row, or per-block scales.
+
+    Covers the ``COMPRESSED_TENSORS_FP8``, ``FBGEMM_FP8``, and
+    ``BLOCKSCALED_FP8`` quantization formats.
+
+    Attributes:
+        data: The weight tensor in ``float8_e4m3fn`` (or
+            ``float8_e4m3fnuz`` after conversion for AMD GPUs).
+        scale: Scaling factors in ``float32`` (or ``float8_e4m3fn``
+            for block-scaled).  Granularity is per-tensor (scalar),
+            per-row ``[N, 1]``, or per-block ``[N, K // block_k]``.
+    """
+
+    pass
 
 
 @dataclass
@@ -62,3 +88,22 @@ class Nvfp4Tensor(ScaledTensor):
     """
 
     global_scale: TensorValue
+
+
+@dataclass
+class Mxfp4Tensor(ScaledTensor):
+    """An MXFP4 (Microscaling FP4) quantized tensor.
+
+    Used in MoE (Mixture of Experts) layers where weights are stored
+    in a packed format with per-block scales.
+
+    Attributes:
+        data: Packed uint8 tensor where each byte stores two FP4
+            values.  Shape is ``[N, K//2]`` (dense) or
+            ``[E, N, K//2]`` (MoE with E experts).
+        scale: Per-block scaling factors in ``float8_e8m0fnu``.
+            Shape is ``[N, K//32]`` (dense) or
+            ``[E, N, K//32]`` (MoE).
+    """
+
+    pass

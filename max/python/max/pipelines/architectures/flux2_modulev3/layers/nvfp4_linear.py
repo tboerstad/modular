@@ -24,7 +24,7 @@ from max.experimental.nn import Module, PinnedDeviceTensor
 from max.experimental.tensor import Tensor
 from max.graph import TensorValue
 from max.graph.ops import reshape
-from max.nn.nvfp4_tensor import Nvfp4Tensor
+from max.nn.scaled_tensors import Nvfp4Tensor
 from max.nn.quant_config import QuantConfig
 from max.nn.quant_ops import nvfp4_matmul, prepare_nvfp4_weight, quantize_to_nvfp4
 

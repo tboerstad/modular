@@ -32,7 +32,7 @@ from max.nn.kv_cache import KVCacheParams, PagedCacheValues
 from max.nn.layer import Module, Shardable
 from max.nn.linear import Linear
 from max.nn.norm import RMSNorm
-from max.nn.nvfp4_tensor import ScaledTensor
+from max.nn.scaled_tensors import Float8Tensor
 from max.nn.quant_config import QuantConfig
 from max.nn.quant_ops import quantized_fused_qkv_matmul
 from max.nn.rotary_embedding import RotaryEmbedding
@@ -371,7 +371,7 @@ class Qwen3Attention(Module, Shardable):
             xq = quantized_fused_qkv_matmul(
                 kv_params=self.kv_params,
                 x=x,
-                weight=ScaledTensor(
+                weight=Float8Tensor(
                     data=wqkv, scale=self._qkv_weight_scale()
                 ),
                 kv_collection=kv_collection,
