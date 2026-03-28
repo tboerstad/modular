@@ -54,7 +54,12 @@ from ..no_opaque_kernels import (
     store_v_cache,
 )
 from ..norm import RMSNorm
-from ..quant_ops import quantized_matmul
+from ..quant_ops import (
+    nvfp4_matmul,
+    prepare_nvfp4_weight,
+    quantize_to_nvfp4,
+    quantized_matmul,
+)
 from ..rotary_embedding import RotaryEmbedding
 from .interfaces import DistributedAttentionImpl
 from .mask_config import MHAMaskVariant
@@ -607,21 +612,27 @@ class AttentionWithRope(Module, Shardable):
         # QKV matmul: graph-level weight concat via wqkv property,
         # then a single matmul (quantized or bf16).
         wqkv = self.wqkv.to(x.device)
-        if self.quant_config:
-            scaled_weight: ScaledTensor
-            if self.quant_config.is_nvfp4:
-                ws2 = self.qkv_weight_scale_2
-                assert ws2 is not None
-                scaled_weight = Nvfp4Tensor(
+        if self.quant_config and self.quant_config.is_nvfp4:
+            # NVFP4: quantize input, prepare weight, matmul directly.
+            input_scale = self.qkv_input_scale
+            ws2 = self.qkv_weight_scale_2
+            assert input_scale is not None
+            assert ws2 is not None
+            a = quantize_to_nvfp4(x, input_scale)
+            b = prepare_nvfp4_weight(
+                Nvfp4Tensor(
                     data=wqkv,
                     scale=self.qkv_weight_scale,
                     global_scale=ws2,
-                )
-            else:
-                scaled_weight = ScaledTensor(
-                    data=wqkv,
-                    scale=self.qkv_weight_scale,
-                )
+                ),
+                device=x.device,
+            )
+            qkv = nvfp4_matmul(a, b)
+        elif self.quant_config:
+            scaled_weight = ScaledTensor(
+                data=wqkv,
+                scale=self.qkv_weight_scale,
+            )
             qkv = quantized_matmul(
                 x,
                 scaled_weight,

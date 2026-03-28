@@ -15,7 +15,6 @@ from max.dtype import DType
 from max.graph import DeviceRef, TensorValue
 
 from .kernels import (
-    _fused_qkv_ragged_matmul_scaled_float4,
     _fused_qkv_ragged_matmul_scaled_float8,
     block_scales_interleave,
     convert_weights_to_fp8_fnuz_if_needed,
@@ -58,6 +57,28 @@ def quantize_to_nvfp4(
     return Nvfp4Tensor(data=data, scale=scale, global_scale=input_scale)
 
 
+def prepare_nvfp4_weight(weight: Nvfp4Tensor, device: DeviceRef) -> Nvfp4Tensor:
+    """Interleave weight block scales for GPU kernel consumption.
+
+    Converts the flat ``[M, K//16]`` scale layout loaded from disk into
+    the 5-D interleaved layout required by the matmul kernel.
+
+    Args:
+        weight: An :class:`Nvfp4Tensor` with flat (non-interleaved)
+            block scales.
+        device: Target device for the scales tensor.
+
+    Returns:
+        A new :class:`Nvfp4Tensor` with interleaved scales on
+        ``device``.
+    """
+    return Nvfp4Tensor(
+        data=weight.data,
+        scale=block_scales_interleave(weight.scale.to(device)),
+        global_scale=weight.global_scale,
+    )
+
+
 def nvfp4_matmul(
     a: Nvfp4Tensor,
     b: Nvfp4Tensor,
@@ -70,9 +91,9 @@ def nvfp4_matmul(
 
     Args:
         a: The activation :class:`Nvfp4Tensor` (typically dynamically
-            quantized).
+            quantized via :func:`quantize_to_nvfp4`).
         b: The weight :class:`Nvfp4Tensor` (block scales must already
-            be interleaved).
+            be interleaved via :func:`prepare_nvfp4_weight`).
         out_type: Output dtype (default ``bfloat16``).
 
     Returns:
@@ -86,37 +107,6 @@ def nvfp4_matmul(
         tensor_sf=b.global_scale * a.global_scale,
         out_type=out_type,
     )
-
-
-def _matmul_float4(
-    x: TensorValue,
-    weight: Nvfp4Tensor,
-    input_scale: TensorValue,
-) -> TensorValue:
-    """Computes x @ weight.T with modelopt NVFP4 quantization.
-
-    Args:
-        x: The input tensor in bf16.
-        weight: The :class:`Nvfp4Tensor` containing the quantized weight,
-            per-block scales (flat, pre-interleave), and ``global_scale``
-            (``weight_scale_2``).
-        input_scale: The input scale factor in f32.
-
-    Returns:
-        The output tensor in bf16.
-    """
-    a = quantize_to_nvfp4(x, input_scale)
-
-    interleaved_weight_scale = block_scales_interleave(
-        weight.scale.to(a.data.device),
-    )
-    b = Nvfp4Tensor(
-        data=weight.data,
-        scale=interleaved_weight_scale,
-        global_scale=weight.global_scale,
-    )
-
-    return nvfp4_matmul(a, b)
 
 
 def _matmul_float8(
@@ -173,31 +163,23 @@ def quantized_matmul(
     quant_config: QuantConfig,
     input_scale: TensorValue | None = None,
 ) -> TensorValue:
-    """Single entry point for all quantized dense matmuls.
+    """Single entry point for FP8 quantized dense matmuls.
 
-    Dispatches to the appropriate kernel based on the quantization format
-    in ``quant_config``.
+    Dispatches to the appropriate FP8 kernel based on the quantization
+    format in ``quant_config``.  For NVFP4, use :func:`quantize_to_nvfp4`,
+    :func:`prepare_nvfp4_weight`, and :func:`nvfp4_matmul` directly.
 
     Args:
         x: The input tensor.
-        weight: A :class:`ScaledTensor` (FP8) or :class:`Nvfp4Tensor`
-            (NVFP4) holding the quantized weight and its scales.
+        weight: A :class:`ScaledTensor` holding the FP8 quantized weight
+            and its scales.
         quant_config: The quantization configuration.
-        input_scale: The input scale tensor (required for NVFP4 and
-            static FP8).
+        input_scale: The input scale tensor (required for static FP8).
 
     Returns:
         The output tensor.
     """
     match quant_config.format:
-        case QuantFormat.NVFP4:
-            assert input_scale is not None
-            assert isinstance(weight, Nvfp4Tensor)
-            return _matmul_float4(
-                x,
-                weight,
-                input_scale,
-            )
         case (
             QuantFormat.COMPRESSED_TENSORS_FP8
             | QuantFormat.FBGEMM_FP8
@@ -228,24 +210,23 @@ def quantized_fused_qkv_matmul(
     bias: TensorValue | None = None,
     _output_dim: int | None = None,
 ) -> TensorValue:
-    """Single entry point for quantized fused QKV matmuls.
+    """Single entry point for quantized fused QKV matmuls (FP8 only).
 
-    Dispatches to the NVFP4 or FP8 fused QKV kernel based on the
+    Dispatches to the appropriate FP8 fused QKV kernel based on the
     quantization format in ``quant_config``.
 
     Args:
         kv_params: KV cache parameters.
         x: The input tensor of shape ``[total_seq_len, hidden_dim]``.
-        weight: A :class:`ScaledTensor` (FP8) or :class:`Nvfp4Tensor`
-            (NVFP4) holding the concatenated QKV weight and its scales.
+        weight: A :class:`ScaledTensor` holding the FP8 concatenated
+            QKV weight and its scales.
         kv_collection: The paged KV cache.
         layer_idx: The current layer index.
         input_row_offsets: Batch boundary offsets.
         n_heads: Number of attention heads.
         quant_config: The quantization configuration.
-        input_scale: The input scale tensor (required for NVFP4 and
-            static FP8).
-        bias: Optional bias tensor (FP8 only).
+        input_scale: The input scale tensor (required for static FP8).
+        bias: Optional bias tensor.
         _output_dim: Optional output dimension override for the FP8
             kernel.
 
@@ -253,28 +234,6 @@ def quantized_fused_qkv_matmul(
         The query projection output tensor.
     """
     match quant_config.format:
-        case QuantFormat.NVFP4:
-            assert input_scale is not None
-            assert isinstance(weight, Nvfp4Tensor)
-
-            a = quantize_to_nvfp4(x, input_scale)
-
-            interleaved_weight_scale = block_scales_interleave(
-                weight.scale.to(a.data.device),
-            )
-
-            return _fused_qkv_ragged_matmul_scaled_float4(
-                kv_params,
-                input=a.data,
-                input_row_offsets=input_row_offsets,
-                wqkv=weight.data,
-                kv_collection=kv_collection,
-                layer_idx=layer_idx,
-                n_heads=n_heads,
-                input_scale=a.scale.to(a.data.device),
-                weight_scale=interleaved_weight_scale,
-                tensor_sf=a.global_scale * weight.global_scale,
-            )
         case (
             QuantFormat.COMPRESSED_TENSORS_FP8
             | QuantFormat.FBGEMM_FP8

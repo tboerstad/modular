@@ -36,7 +36,12 @@ from max.nn.quant_config import (
     ScaleGranularity,
     nvfp4_packed_k,
 )
-from max.nn.quant_ops import quantized_matmul
+from max.nn.quant_ops import (
+    nvfp4_matmul,
+    prepare_nvfp4_weight,
+    quantize_to_nvfp4,
+    quantized_matmul,
+)
 from max.support.math import ceildiv
 
 from .activation import activation_function_from_name
@@ -462,27 +467,39 @@ class Linear(Module, Shardable):
         if self.clip_weight:
             weight = clamp(weight, -self.clip_weight, self.clip_weight)
 
-        scaled_weight: ScaledTensor | None = None
-        if self.quant_config is not None and self.weight_scale is not None:
-            ws = TensorValue(self.weight_scale)
-            if self.quant_config.is_nvfp4:
-                assert self.weight_scale_2 is not None
-                scaled_weight = Nvfp4Tensor(
+        if (
+            self.quant_config is not None
+            and self.quant_config.is_nvfp4
+            and self.weight_scale is not None
+        ):
+            # NVFP4: quantize input, prepare weight, matmul directly.
+            assert self.input_scale is not None
+            assert self.weight_scale_2 is not None
+            a = quantize_to_nvfp4(x, TensorValue(self.input_scale))
+            b = prepare_nvfp4_weight(
+                Nvfp4Tensor(
                     data=weight,
-                    scale=ws,
+                    scale=TensorValue(self.weight_scale),
                     global_scale=TensorValue(self.weight_scale_2),
+                ),
+                device=x.device,
+            )
+            res = nvfp4_matmul(a, b)
+        else:
+            scaled_weight: ScaledTensor | None = None
+            if self.quant_config is not None and self.weight_scale is not None:
+                scaled_weight = ScaledTensor(
+                    data=weight, scale=TensorValue(self.weight_scale)
                 )
-            else:
-                scaled_weight = ScaledTensor(data=weight, scale=ws)
 
-        res = linear(
-            x,
-            weight,
-            self.weight.quantization_encoding,
-            self.quant_config,
-            self.input_scale,
-            scaled_weight=scaled_weight,
-        )
+            res = linear(
+                x,
+                weight,
+                self.weight.quantization_encoding,
+                self.quant_config,
+                self.input_scale,
+                scaled_weight=scaled_weight,
+            )
 
         if self.bias is not None:
             res += self.bias.to(res.device)
@@ -497,16 +514,19 @@ def linear(
     input_scale: TensorValue | None = None,
     scaled_weight: ScaledTensor | None = None,
 ) -> TensorValue:
-    """Computes x @ weight.T with quantization support.
+    """Computes x @ weight.T with quantization support (FP8 path).
+
+    For NVFP4, use :func:`quantize_to_nvfp4`, :func:`prepare_nvfp4_weight`,
+    and :func:`nvfp4_matmul` directly.
 
     Args:
         x: The input tensor.
         weight: The weight tensor (used for non-quantized path).
         quantization_encoding: Optional GGUF/GPTQ quantization encoding.
-        quant_config: Quantization configuration for FP8/NVFP4.
-        input_scale: Input scale tensor.
-        scaled_weight: A :class:`ScaledTensor` or :class:`Nvfp4Tensor`
-            bundling the quantized weight with its scales.
+        quant_config: Quantization configuration for FP8.
+        input_scale: Input scale tensor (static FP8 only).
+        scaled_weight: A :class:`ScaledTensor` holding the FP8 weight
+            and its scales.
     """
     if quantization_encoding is not None:
         return ops.qmatmul(quantization_encoding, None, x, weight)
@@ -932,14 +952,20 @@ class MLP(Module, Shardable):
         else:
             # Optimization to compute a single matmul by merging the
             # gate and up projection weights.
+            fused_weight = self._concat_or_max_gate_up_weights()
+            fused_scale = self._concat_or_max_gate_up_scales()
+            scaled_weight: ScaledTensor | None = None
+            if self.quant_config is not None and fused_scale is not None:
+                scaled_weight = ScaledTensor(
+                    data=fused_weight, scale=fused_scale
+                )
             output = linear(
                 TensorValue(x),
-                self._concat_or_max_gate_up_weights(),
+                fused_weight,
                 self.quantization_encoding,
                 self.quant_config,
                 input_scale=self._concat_or_max_gate_up_input_scale(),
-                weight_scale=self._concat_or_max_gate_up_scales(),
-                weight_scale_2=self._concat_or_max_gate_up_weight_scale_2(),
+                scaled_weight=scaled_weight,
             )
 
             bias = self._concat_or_max_gate_up_bias()

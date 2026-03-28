@@ -26,7 +26,7 @@ from max.graph import TensorValue
 from max.graph.ops import reshape
 from max.nn.nvfp4_tensor import Nvfp4Tensor
 from max.nn.quant_config import QuantConfig
-from max.nn.quant_ops import quantized_matmul
+from max.nn.quant_ops import nvfp4_matmul, prepare_nvfp4_weight, quantize_to_nvfp4
 
 
 class NVFP4Linear(Module[[Tensor], Tensor]):
@@ -73,18 +73,16 @@ class NVFP4Linear(Module[[Tensor], Tensor]):
             m_dim = reduce(operator.mul, leading_dims)
             xv = reshape(xv, [m_dim, k_dim])
 
-        nvfp4_weight = Nvfp4Tensor(
-            data=TensorValue(self.weight),
-            scale=TensorValue(self.weight_scale),
-            global_scale=TensorValue(self.weight_scale_2),
+        a = quantize_to_nvfp4(xv, TensorValue(self.input_scale))
+        b = prepare_nvfp4_weight(
+            Nvfp4Tensor(
+                data=TensorValue(self.weight),
+                scale=TensorValue(self.weight_scale),
+                global_scale=TensorValue(self.weight_scale_2),
+            ),
+            device=xv.device,
         )
-
-        result_val = quantized_matmul(
-            xv,
-            nvfp4_weight,
-            self._quant_config,
-            input_scale=TensorValue(self.input_scale),
-        )
+        result_val = nvfp4_matmul(a, b)
 
         if len(leading_dims) > 1:
             out_dim = result_val.shape[-1]
