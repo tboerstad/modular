@@ -81,9 +81,9 @@ class NVFP4Linear(Module[[Tensor], Tensor]):
 
         result_val = quantized_matmul(
             xv,
+            nvfp4_weight,
             self._quant_config,
             input_scale=TensorValue(self.input_scale),
-            nvfp4_weight=nvfp4_weight,
         )
 
         if len(leading_dims) > 1:

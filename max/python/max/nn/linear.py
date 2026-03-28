@@ -30,7 +30,7 @@ from max.graph import (
     ops,
 )
 from max.graph.quantization import QuantizationConfig, QuantizationEncoding
-from max.nn.nvfp4_tensor import Nvfp4Tensor
+from max.nn.nvfp4_tensor import Nvfp4Tensor, ScaledTensor
 from max.nn.quant_config import (
     QuantConfig,
     ScaleGranularity,
@@ -462,18 +462,18 @@ class Linear(Module, Shardable):
         if self.clip_weight:
             weight = clamp(weight, -self.clip_weight, self.clip_weight)
 
-        nvfp4_weight: Nvfp4Tensor | None = None
-        if (
-            self.quant_config is not None
-            and self.quant_config.is_nvfp4
-            and self.weight_scale is not None
-            and self.weight_scale_2 is not None
-        ):
-            nvfp4_weight = Nvfp4Tensor(
-                data=weight,
-                scale=TensorValue(self.weight_scale),
-                global_scale=TensorValue(self.weight_scale_2),
-            )
+        scaled_weight: ScaledTensor | None = None
+        if self.quant_config is not None and self.weight_scale is not None:
+            ws = TensorValue(self.weight_scale)
+            if self.quant_config.is_nvfp4:
+                assert self.weight_scale_2 is not None
+                scaled_weight = Nvfp4Tensor(
+                    data=weight,
+                    scale=ws,
+                    global_scale=TensorValue(self.weight_scale_2),
+                )
+            else:
+                scaled_weight = ScaledTensor(data=weight, scale=ws)
 
         res = linear(
             x,
@@ -481,8 +481,7 @@ class Linear(Module, Shardable):
             self.weight.quantization_encoding,
             self.quant_config,
             self.input_scale,
-            self.weight_scale,
-            nvfp4_weight=nvfp4_weight,
+            scaled_weight=scaled_weight,
         )
 
         if self.bias is not None:
@@ -496,31 +495,28 @@ def linear(
     quantization_encoding: QuantizationEncoding | None = None,
     quant_config: QuantConfig | None = None,
     input_scale: TensorValue | None = None,
-    weight_scale: TensorValue | None = None,
-    nvfp4_weight: Nvfp4Tensor | None = None,
+    scaled_weight: ScaledTensor | None = None,
 ) -> TensorValue:
     """Computes x @ weight.T with quantization support.
 
     Args:
         x: The input tensor.
-        weight: The weight tensor.
+        weight: The weight tensor (used for non-quantized path).
         quantization_encoding: Optional GGUF/GPTQ quantization encoding.
         quant_config: Quantization configuration for FP8/NVFP4.
         input_scale: Input scale tensor.
-        weight_scale: Weight scale tensor (FP8 only).
-        nvfp4_weight: The :class:`Nvfp4Tensor` for the weight (NVFP4
-            only).
+        scaled_weight: A :class:`ScaledTensor` or :class:`Nvfp4Tensor`
+            bundling the quantized weight with its scales.
     """
     if quantization_encoding is not None:
         return ops.qmatmul(quantization_encoding, None, x, weight)
     elif quant_config:
+        assert scaled_weight is not None
         return quantized_matmul(
             x,
+            scaled_weight,
             quant_config,
             input_scale=input_scale,
-            nvfp4_weight=nvfp4_weight,
-            weight=weight,
-            weight_scale=weight_scale,
         )
     else:
         return x @ weight.T

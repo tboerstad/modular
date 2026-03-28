@@ -39,6 +39,7 @@ from ..kv_cache import KVCacheParams, PagedCacheValues
 from ..layer import Module, Shardable
 from ..linear import Linear
 from ..norm import RMSNorm
+from ..nvfp4_tensor import ScaledTensor
 from ..quant_config import QuantConfig, nvfp4_packed_k
 from ..quant_ops import quantized_fused_qkv_matmul, quantized_matmul
 from ..rotary_embedding import RotaryEmbedding
@@ -674,13 +675,12 @@ class LatentAttentionWithRopeFp8(Module, Shardable):
         q_a_out = quantized_fused_qkv_matmul(
             kv_params=self.kv_params,
             x=x,
+            weight=ScaledTensor(data=wqkv, scale=wqkv_scale),
             kv_collection=kv_collection,
             layer_idx=layer_idx,
             input_row_offsets=input_row_offsets,
             n_heads=self.n_heads,
             quant_config=self.quant_config,
-            wqkv=wqkv,
-            weight_scale=wqkv_scale,
             _output_dim=self.q_lora_rank,
         )
 
@@ -690,9 +690,8 @@ class LatentAttentionWithRopeFp8(Module, Shardable):
         # Second FP8 matmul: q_a_normed @ q_b_proj.T
         xq = quantized_matmul(
             q_a_normed,
+            ScaledTensor(data=self.q_b_proj, scale=self.q_b_proj_scale),
             self.quant_config,
-            weight=self.q_b_proj,
-            weight_scale=self.q_b_proj_scale,
         )
 
         xq = xq.reshape((-1, self.n_heads, self.qk_head_dim))

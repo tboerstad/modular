@@ -30,7 +30,7 @@ from max.graph import (
 from max.graph.quantization import QuantizationConfig, QuantizationEncoding
 from max.graph.weight import _compute_shard_range
 from max.nn.kernels import convert_weights_to_fp8_fnuz_if_needed
-from max.nn.nvfp4_tensor import Nvfp4Tensor
+from max.nn.nvfp4_tensor import Nvfp4Tensor, ScaledTensor
 from max.nn.quant_config import QuantConfig
 
 from ..clamp import clamp
@@ -608,22 +608,25 @@ class AttentionWithRope(Module, Shardable):
         # then a single matmul (quantized or bf16).
         wqkv = self.wqkv.to(x.device)
         if self.quant_config:
-            nvfp4_weight: Nvfp4Tensor | None = None
+            scaled_weight: ScaledTensor
             if self.quant_config.is_nvfp4:
                 ws2 = self.qkv_weight_scale_2
                 assert ws2 is not None
-                nvfp4_weight = Nvfp4Tensor(
+                scaled_weight = Nvfp4Tensor(
                     data=wqkv,
                     scale=self.qkv_weight_scale,
                     global_scale=ws2,
                 )
+            else:
+                scaled_weight = ScaledTensor(
+                    data=wqkv,
+                    scale=self.qkv_weight_scale,
+                )
             qkv = quantized_matmul(
                 x,
+                scaled_weight,
                 self.quant_config,
                 input_scale=self.qkv_input_scale,
-                nvfp4_weight=nvfp4_weight,
-                weight=wqkv,
-                weight_scale=self.qkv_weight_scale,
             )
         else:
             qkv = x @ wqkv.T
