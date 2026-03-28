@@ -246,14 +246,14 @@ class Gemma3Attention(Module, Shardable):
             xq = quantized_fused_qkv_matmul(
                 kv_params=self.kv_params,
                 x=x,
-                wqkv=self.wqkv,
                 kv_collection=kv_collection,
                 layer_idx=layer_idx,
                 input_row_offsets=kwargs["input_row_offsets"],
                 n_heads=self.n_heads,
                 quant_config=self.quant_config,
-                weight_scale=self.qkv_weight_scale,
                 input_scale=self.qkv_input_scale,
+                wqkv=self.wqkv,
+                weight_scale=self.qkv_weight_scale,
                 bias=self.wqkv_bias,
             )
         else:

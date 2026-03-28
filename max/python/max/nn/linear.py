@@ -482,7 +482,6 @@ class Linear(Module, Shardable):
             self.quant_config,
             self.input_scale,
             self.weight_scale,
-            self.weight_scale_2,
             nvfp4_weight=nvfp4_weight,
         )
 
@@ -498,7 +497,6 @@ def linear(
     quant_config: QuantConfig | None = None,
     input_scale: TensorValue | None = None,
     weight_scale: TensorValue | None = None,
-    weight_scale_2: TensorValue | None = None,
     nvfp4_weight: Nvfp4Tensor | None = None,
 ) -> TensorValue:
     """Computes x @ weight.T with quantization support.
@@ -509,23 +507,20 @@ def linear(
         quantization_encoding: Optional GGUF/GPTQ quantization encoding.
         quant_config: Quantization configuration for FP8/NVFP4.
         input_scale: Input scale tensor.
-        weight_scale: Weight scale tensor.
-        weight_scale_2: Additional weight scale (NVFP4 only, ignored
-            when ``nvfp4_weight`` is provided).
-        nvfp4_weight: Pre-built :class:`Nvfp4Tensor` for the weight.
+        weight_scale: Weight scale tensor (FP8 only).
+        nvfp4_weight: The :class:`Nvfp4Tensor` for the weight (NVFP4
+            only).
     """
     if quantization_encoding is not None:
         return ops.qmatmul(quantization_encoding, None, x, weight)
     elif quant_config:
-        assert weight_scale is not None
         return quantized_matmul(
             x,
-            weight,
-            weight_scale,
-            input_scale,
             quant_config,
-            weight_scale_2,
+            input_scale=input_scale,
             nvfp4_weight=nvfp4_weight,
+            weight=weight,
+            weight_scale=weight_scale,
         )
     else:
         return x @ weight.T

@@ -370,12 +370,12 @@ class Qwen3Attention(Module, Shardable):
             xq = quantized_fused_qkv_matmul(
                 kv_params=self.kv_params,
                 x=x,
-                wqkv=wqkv,
                 kv_collection=kv_collection,
                 layer_idx=layer_idx,
                 input_row_offsets=input_row_offsets,
                 n_heads=self.n_heads,
                 quant_config=self.quant_config,
+                wqkv=wqkv,
                 weight_scale=self._qkv_weight_scale(),
                 bias=self.wqkv_bias,
             )

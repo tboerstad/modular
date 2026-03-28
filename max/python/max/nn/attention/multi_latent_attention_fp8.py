@@ -674,12 +674,12 @@ class LatentAttentionWithRopeFp8(Module, Shardable):
         q_a_out = quantized_fused_qkv_matmul(
             kv_params=self.kv_params,
             x=x,
-            wqkv=wqkv,
             kv_collection=kv_collection,
             layer_idx=layer_idx,
             input_row_offsets=input_row_offsets,
             n_heads=self.n_heads,
             quant_config=self.quant_config,
+            wqkv=wqkv,
             weight_scale=wqkv_scale,
             _output_dim=self.q_lora_rank,
         )
@@ -689,11 +689,10 @@ class LatentAttentionWithRopeFp8(Module, Shardable):
 
         # Second FP8 matmul: q_a_normed @ q_b_proj.T
         xq = quantized_matmul(
-            x=q_a_normed,
+            q_a_normed,
+            self.quant_config,
             weight=self.q_b_proj,
             weight_scale=self.q_b_proj_scale,
-            input_scale=None,  # Dynamic scaling
-            quant_config=self.quant_config,
         )
 
         xq = xq.reshape((-1, self.n_heads, self.qk_head_dim))

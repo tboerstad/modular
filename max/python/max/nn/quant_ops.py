@@ -170,12 +170,11 @@ def _matmul_float8(
 
 def quantized_matmul(
     x: TensorValue,
-    weight: TensorValue,
-    weight_scale: TensorValue,
-    input_scale: TensorValue | None,
     quant_config: QuantConfig,
-    weight_scale_2: TensorValue | None = None,
+    input_scale: TensorValue | None = None,
     nvfp4_weight: Nvfp4Tensor | None = None,
+    weight: TensorValue | None = None,
+    weight_scale: TensorValue | None = None,
 ) -> TensorValue:
     """Single entry point for all quantized dense matmuls.
 
@@ -184,17 +183,13 @@ def quantized_matmul(
 
     Args:
         x: The input tensor.
-        weight: The weight tensor.
-        weight_scale: The weight scale tensor.
+        quant_config: The quantization configuration.
         input_scale: The input scale tensor (required for NVFP4 and
             static FP8).
-        quant_config: The quantization configuration.
-        weight_scale_2: Additional weight scale factor (NVFP4 only,
-            ignored when ``nvfp4_weight`` is provided).
-        nvfp4_weight: Pre-built :class:`Nvfp4Tensor` for the weight.
-            When supplied the ``weight``, ``weight_scale``, and
-            ``weight_scale_2`` parameters are ignored for the NVFP4
-            path.
+        nvfp4_weight: The :class:`Nvfp4Tensor` for the weight
+            (required for NVFP4).
+        weight: The weight tensor (required for FP8).
+        weight_scale: The weight scale tensor (required for FP8).
 
     Returns:
         The output tensor.
@@ -202,13 +197,7 @@ def quantized_matmul(
     match quant_config.format:
         case QuantFormat.NVFP4:
             assert input_scale is not None
-            if nvfp4_weight is None:
-                assert weight_scale_2 is not None
-                nvfp4_weight = Nvfp4Tensor(
-                    data=weight,
-                    scale=weight_scale,
-                    global_scale=weight_scale_2,
-                )
+            assert nvfp4_weight is not None
             return _matmul_float4(
                 x,
                 nvfp4_weight,
@@ -219,6 +208,8 @@ def quantized_matmul(
             | QuantFormat.FBGEMM_FP8
             | QuantFormat.BLOCKSCALED_FP8
         ):
+            assert weight is not None
+            assert weight_scale is not None
             return _matmul_float8(
                 x,
                 weight,
@@ -235,18 +226,17 @@ def quantized_matmul(
 def quantized_fused_qkv_matmul(
     kv_params: KVCacheParams,
     x: TensorValue,
-    wqkv: TensorValue,
     kv_collection: PagedCacheValues,
     layer_idx: TensorValue,
     input_row_offsets: TensorValue,
     n_heads: int,
     quant_config: QuantConfig,
-    weight_scale: TensorValue,
     input_scale: TensorValue | None = None,
-    weight_scale_2: TensorValue | None = None,
+    nvfp4_weight: Nvfp4Tensor | None = None,
+    wqkv: TensorValue | None = None,
+    weight_scale: TensorValue | None = None,
     bias: TensorValue | None = None,
     _output_dim: int | None = None,
-    nvfp4_weight: Nvfp4Tensor | None = None,
 ) -> TensorValue:
     """Single entry point for quantized fused QKV matmuls.
 
@@ -256,22 +246,20 @@ def quantized_fused_qkv_matmul(
     Args:
         kv_params: KV cache parameters.
         x: The input tensor of shape ``[total_seq_len, hidden_dim]``.
-        wqkv: The concatenated QKV weight tensor.
         kv_collection: The paged KV cache.
         layer_idx: The current layer index.
         input_row_offsets: Batch boundary offsets.
         n_heads: Number of attention heads.
         quant_config: The quantization configuration.
-        weight_scale: The weight scale tensor.
         input_scale: The input scale tensor.
-        weight_scale_2: Additional weight scale factor (NVFP4 only,
-            ignored when ``nvfp4_weight`` is provided).
+        nvfp4_weight: The :class:`Nvfp4Tensor` for the QKV weight
+            (required for NVFP4).
+        wqkv: The concatenated QKV weight tensor (required for FP8).
+        weight_scale: The weight scale tensor (required for FP8).
         bias: Optional bias tensor (FP8 only).
         _output_dim: Optional output dimension override for the FP8
             kernel. If not provided, defaults to
             ``n_heads * head_dim``.
-        nvfp4_weight: Pre-built :class:`Nvfp4Tensor` for the QKV
-            weight.
 
     Returns:
         The query projection output tensor.
@@ -279,13 +267,7 @@ def quantized_fused_qkv_matmul(
     match quant_config.format:
         case QuantFormat.NVFP4:
             assert input_scale is not None
-            if nvfp4_weight is None:
-                assert weight_scale_2 is not None
-                nvfp4_weight = Nvfp4Tensor(
-                    data=wqkv,
-                    scale=weight_scale,
-                    global_scale=weight_scale_2,
-                )
+            assert nvfp4_weight is not None
 
             a = quantize_to_nvfp4(x, input_scale)
 
@@ -310,6 +292,8 @@ def quantized_fused_qkv_matmul(
             | QuantFormat.FBGEMM_FP8
             | QuantFormat.BLOCKSCALED_FP8
         ):
+            assert wqkv is not None
+            assert weight_scale is not None
             # FP8 path (static or dynamic)
             if quant_config.is_static:
                 assert input_scale is not None

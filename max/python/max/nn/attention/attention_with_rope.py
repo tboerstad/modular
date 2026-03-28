@@ -619,12 +619,11 @@ class AttentionWithRope(Module, Shardable):
                 )
             qkv = quantized_matmul(
                 x,
-                wqkv,
-                weight_scale=self.qkv_weight_scale,
+                self.quant_config,
                 input_scale=self.qkv_input_scale,
-                quant_config=self.quant_config,
-                weight_scale_2=self.qkv_weight_scale_2,
                 nvfp4_weight=nvfp4_weight,
+                weight=wqkv,
+                weight_scale=self.qkv_weight_scale,
             )
         else:
             qkv = x @ wqkv.T

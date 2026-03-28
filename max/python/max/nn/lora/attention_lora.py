@@ -147,14 +147,14 @@ class AttentionWithRopeAndLoRA(AttentionWithRope):
             xq_matmul = quantized_fused_qkv_matmul(
                 kv_params=self.kv_params,
                 x=x,
-                wqkv=wqkv,
                 kv_collection=kv_collection,
                 layer_idx=layer_idx,
                 input_row_offsets=input_row_offsets,
                 n_heads=self.n_heads,
                 quant_config=self.quant_config,
-                weight_scale=self.qkv_weight_scale,
                 input_scale=self.qkv_input_scale,
+                wqkv=wqkv,
+                weight_scale=self.qkv_weight_scale,
                 bias=wqkv_bias,
             )
         else:
