@@ -28,6 +28,7 @@ from ..kernels import (
     quantize_dynamic_block_scaled_fp4,
     quantize_dynamic_scaled_float8,
 )
+from ..nvfp4_tensor import Nvfp4Tensor
 from ..quant_config import QuantConfig
 
 
@@ -181,12 +182,22 @@ class Nvfp4Strategy:
         """Quantizes activations to NVFP4 and returns (quantized, scales)."""
         if input_scale is None:
             raise ValueError("NVFP4 requires input_scale")
-        return quantize_dynamic_block_scaled_fp4(
+        nvfp4 = self.quantize_to_nvfp4(tensor, input_scale)
+        return nvfp4.data, nvfp4.scale
+
+    def quantize_to_nvfp4(
+        self,
+        tensor: TensorValue,
+        input_scale: TensorValue,
+    ) -> Nvfp4Tensor:
+        """Quantizes activations to an :class:`Nvfp4Tensor`."""
+        data, scale = quantize_dynamic_block_scaled_fp4(
             tensor,
             tensor_sf=1.0 / input_scale,
             scales_type=DType.float8_e4m3fn,
             out_type=DType.uint8,
         )
+        return Nvfp4Tensor(data=data, scale=scale, global_scale=input_scale)
 
     def grouped_matmul(
         self,

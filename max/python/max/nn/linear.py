@@ -30,6 +30,7 @@ from max.graph import (
     ops,
 )
 from max.graph.quantization import QuantizationConfig, QuantizationEncoding
+from max.nn.nvfp4_tensor import Nvfp4Tensor
 from max.nn.quant_config import (
     QuantConfig,
     ScaleGranularity,
@@ -461,6 +462,19 @@ class Linear(Module, Shardable):
         if self.clip_weight:
             weight = clamp(weight, -self.clip_weight, self.clip_weight)
 
+        nvfp4_weight: Nvfp4Tensor | None = None
+        if (
+            self.quant_config is not None
+            and self.quant_config.is_nvfp4
+            and self.weight_scale is not None
+            and self.weight_scale_2 is not None
+        ):
+            nvfp4_weight = Nvfp4Tensor(
+                data=weight,
+                scale=TensorValue(self.weight_scale),
+                global_scale=TensorValue(self.weight_scale_2),
+            )
+
         res = linear(
             x,
             weight,
@@ -469,6 +483,7 @@ class Linear(Module, Shardable):
             self.input_scale,
             self.weight_scale,
             self.weight_scale_2,
+            nvfp4_weight=nvfp4_weight,
         )
 
         if self.bias is not None:
@@ -484,8 +499,21 @@ def linear(
     input_scale: TensorValue | None = None,
     weight_scale: TensorValue | None = None,
     weight_scale_2: TensorValue | None = None,
+    nvfp4_weight: Nvfp4Tensor | None = None,
 ) -> TensorValue:
-    """Computes x @ weight.T with quantization support."""
+    """Computes x @ weight.T with quantization support.
+
+    Args:
+        x: The input tensor.
+        weight: The weight tensor.
+        quantization_encoding: Optional GGUF/GPTQ quantization encoding.
+        quant_config: Quantization configuration for FP8/NVFP4.
+        input_scale: Input scale tensor.
+        weight_scale: Weight scale tensor.
+        weight_scale_2: Additional weight scale (NVFP4 only, ignored
+            when ``nvfp4_weight`` is provided).
+        nvfp4_weight: Pre-built :class:`Nvfp4Tensor` for the weight.
+    """
     if quantization_encoding is not None:
         return ops.qmatmul(quantization_encoding, None, x, weight)
     elif quant_config:
@@ -497,6 +525,7 @@ def linear(
             input_scale,
             quant_config,
             weight_scale_2,
+            nvfp4_weight=nvfp4_weight,
         )
     else:
         return x @ weight.T

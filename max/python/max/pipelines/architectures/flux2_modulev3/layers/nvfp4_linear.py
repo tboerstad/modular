@@ -24,6 +24,7 @@ from max.experimental.nn import Module, PinnedDeviceTensor
 from max.experimental.tensor import Tensor
 from max.graph import TensorValue
 from max.graph.ops import reshape
+from max.nn.nvfp4_tensor import Nvfp4Tensor
 from max.nn.quant_config import QuantConfig
 from max.nn.quant_ops import quantized_matmul
 
@@ -72,13 +73,19 @@ class NVFP4Linear(Module[[Tensor], Tensor]):
             m_dim = reduce(operator.mul, leading_dims)
             xv = reshape(xv, [m_dim, k_dim])
 
+        nvfp4_weight = Nvfp4Tensor(
+            data=TensorValue(self.weight),
+            scale=TensorValue(self.weight_scale),
+            global_scale=TensorValue(self.weight_scale_2),
+        )
+
         result_val = quantized_matmul(
             xv,
-            TensorValue(self.weight),
-            TensorValue(self.weight_scale),
+            nvfp4_weight.data,
+            nvfp4_weight.scale,
             TensorValue(self.input_scale),
             self._quant_config,
-            weight_scale_2=TensorValue(self.weight_scale_2),
+            nvfp4_weight=nvfp4_weight,
         )
 
         if len(leading_dims) > 1:
