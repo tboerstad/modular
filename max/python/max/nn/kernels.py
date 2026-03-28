@@ -332,7 +332,7 @@ def _fused_qkv_ragged_matmul_scaled_float8(
     input_scale: TensorValue,
     weight_scale: TensorValue,
     bias: TensorValue | None = None,
-    quant_config: QuantConfig | None = None,
+    scales_granularity_mnk: tuple[int, int, int] | None = None,
     _output_dim: int | None = None,
 ) -> TensorValue:
     """Computes fused query, key, and value projections with scaled float8 input and weights.
@@ -354,9 +354,9 @@ def _fused_qkv_ragged_matmul_scaled_float8(
         weight_scale: TensorValue representing the weight scale tensor. Shape
             varies depending on the quantization config.
         bias: Optional bias vector concatenated as [q, k, v].
-        quant_config: Optional QuantConfig object containing scaled
-            quantization parameters. If not provided, the quantization config
-            will be inferred from the input and weight scale shapes.
+        scales_granularity_mnk: Optional ``(M, N, K)`` granularity tuple.
+            If not provided, the granularity is inferred from the input
+            and weight scale shapes.
         _output_dim: Optional output dimension. If not provided, the output
             dimension will be [n_heads * head_dim].
 
@@ -417,11 +417,8 @@ def _fused_qkv_ragged_matmul_scaled_float8(
     if weight_scale.shape in [[], [1]]:
         weight_scale = weight_scale.reshape([1, 1])
 
-    # Try to infer the quantization config
-    if quant_config is not None:
-        scales_granularity_mnk = quant_config.scales_granularity_mnk
-    else:
-        # with out quant_config, we either use per-tensor or per-channel quantization
+    # Infer the scale granularity from scale tensor shapes if not provided.
+    if scales_granularity_mnk is None:
         if (
             input_scale.shape[0] == 1
             and input_scale.shape[1] == 1
@@ -433,8 +430,8 @@ def _fused_qkv_ragged_matmul_scaled_float8(
             scales_granularity_mnk = (1, 1, -1)  # per-channel quantization
         else:
             raise ValueError(
-                "Can not infer the quantization config from the input tensor shapes",
-                "Please provide a quant_config",
+                "Cannot infer scale granularity from the input tensor shapes. "
+                "Please provide scales_granularity_mnk explicitly.",
             )
 
     assert kv_params.page_size is not None

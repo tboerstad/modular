@@ -155,7 +155,6 @@ class AttentionWithRopeAndLoRA(AttentionWithRope):
                 layer_idx=layer_idx,
                 input_row_offsets=input_row_offsets,
                 n_heads=self.n_heads,
-                quant_config=self.quant_config,
                 bias=wqkv_bias,
             )
         else:

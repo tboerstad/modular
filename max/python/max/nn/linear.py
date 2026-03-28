@@ -33,7 +33,6 @@ from max.graph.quantization import QuantizationConfig, QuantizationEncoding
 from max.nn.scaled_tensors import Float8Tensor, Nvfp4Tensor, ScaledTensor
 from max.nn.quant_config import (
     QuantConfig,
-    ScaleGranularity,
     nvfp4_packed_k,
 )
 from max.nn.quant_ops import prepare_nvfp4_weight, scaled_matmul
@@ -164,16 +163,6 @@ class Linear(Module, Shardable):
                     shape=(),
                     device=DeviceRef.CPU(),
                     quantization_encoding=quantization_encoding,
-                )
-
-            if quant_config.input_scale.granularity not in (
-                ScaleGranularity.TENSOR,
-                ScaleGranularity.COLWISE,
-                ScaleGranularity.BLOCK,
-            ):
-                raise ValueError(
-                    f"unsupported input scale granularity {quant_config.input_scale.granularity}. "
-                    "Only TENSOR, COLWISE and BLOCK granularities are supported, currently"
                 )
 
             weight_scale = quant_config.weight_scale

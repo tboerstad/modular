@@ -680,7 +680,6 @@ class LatentAttentionWithRopeFp8(Module, Shardable):
             layer_idx=layer_idx,
             input_row_offsets=input_row_offsets,
             n_heads=self.n_heads,
-            quant_config=self.quant_config,
             _output_dim=self.q_lora_rank,
         )
 

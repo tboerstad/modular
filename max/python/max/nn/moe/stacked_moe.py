@@ -686,6 +686,20 @@ class StackedMoE(Module, Shardable):
         """
         assert self.quant_config is not None
 
+        _is_mxfp4 = (
+            self.quant_config is not None and self.quant_config.is_mxfp4
+        )
+        _input_spec = (
+            self.quant_config.input_scale
+            if self.quant_config and not _is_mxfp4
+            else None
+        )
+        _weight_spec = (
+            self.quant_config.weight_scale
+            if self.quant_config and not _is_mxfp4
+            else None
+        )
+
         gate_up_output = grouped_matmul(
             x=permuted_states,
             weight=self._gate_up_weight,
@@ -693,7 +707,9 @@ class StackedMoE(Module, Shardable):
             expert_start_indices=routing.expert_start_indices,
             expert_ids=routing.expert_ids,
             usage_stats=routing.expert_usage_stats,
-            quant_config=self.quant_config,
+            is_mxfp4=_is_mxfp4,
+            input_scale_spec=_input_spec,
+            weight_scale_spec=_weight_spec,
         )
 
         gated_output = self._apply_gated_activation(gate_up_output, routing)
@@ -705,7 +721,9 @@ class StackedMoE(Module, Shardable):
             expert_start_indices=routing.expert_start_indices,
             expert_ids=routing.expert_ids,
             usage_stats=routing.expert_usage_stats,
-            quant_config=self.quant_config,
+            is_mxfp4=_is_mxfp4,
+            input_scale_spec=_input_spec,
+            weight_scale_spec=_weight_spec,
         )
 
         if self.has_bias:
