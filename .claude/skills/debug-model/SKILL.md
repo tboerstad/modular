@@ -17,6 +17,35 @@ MAX first diverges from torch.
 The bug is most likely in the Python part of the stack: config parsing,
 weight loading, or the Python-level neural network operators.
 
+## Understand the Bring-up Context First
+
+Before touching any tool, spend a few minutes understanding what kind of
+bring-up this is. The answer changes where you should look first.
+
+**Is this a genuinely new architecture?**
+If the model introduces new operators or custom kernels that were written
+specifically for it, those kernels are untested and should be on your suspect
+list alongside the Python layer. A kernel bug and a Python bug can look
+identical from the outside.
+
+**Does it use a new or unfamiliar kernel variant?**
+Some models reuse existing kernel families (attention, MLP, normalization)
+but in a configuration that hasn't been exercised before — different head
+dimensions, unusual group sizes, a non-standard tiling. The kernel itself
+may be correct in its common paths but untested in this one.
+
+**Does it mostly reuse well-tested building blocks?**
+If the architecture is a close relative of something already working in MAX
+(same attention style, same MLP, same norm placement), the kernels are
+probably fine and the bug is almost certainly in the Python: config parsing,
+weight mapping, or a subtle structural difference between this model and
+its relatives.
+
+Ask these questions — of the person who filed the bug, of the PR that added
+the model, or of the model's architecture documentation — before running
+anything. A few minutes of context gathering can save hours of debugging in
+the wrong layer of the stack.
+
 ## Before You Start: Ask About Input Modality
 
 If the model is a VLM (vision-language model), **ask the user now**:
