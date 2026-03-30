@@ -1,16 +1,21 @@
 ---
 name: debug-model
 description: >
-  Guide for debugging MAX model accuracy against a PyTorch reference.
-  Use when a MAX model produces incorrect outputs, fails logit verification,
-  or regresses numerically. Walks through the available tooling, common root
-  causes, and how to reason efficiently through the problem.
+  Guide for debugging a MAX model bring-up against a PyTorch reference.
+  Use when a new MAX model implementation produces incorrect outputs.
+  Assumes the model is already known to be wrong — the goal is to find
+  where in the Python stack MAX and torch first diverge.
 ---
 
 # Debug Model
 
 MAX is the **framework under test**. PyTorch is the **reference**.
-The goal is to find where MAX and torch first diverge.
+We are bringing up a new model, so we assume it is already producing
+incorrect results. The goal is to find exactly where in the Python stack
+MAX first diverges from torch.
+
+The bug is most likely in the Python part of the stack: config parsing,
+weight loading, or the Python-level neural network operators.
 
 ## Before You Start: Ask About Input Modality
 
@@ -18,97 +23,77 @@ If the model is a VLM (vision-language model), **ask the user now**:
 
 > Should we debug with a text-only prompt, or with an image input?
 
-The two paths differ in which components are active. Text-only is simpler —
-start there unless the bug is specifically in the vision pathway.
-
-## Classify the Problem First
-
-Two main failure modes, each with different likely causes:
-
-**New model implementation**
-The model is freshly written and has never been correct. Look first at:
-- Config parsing — are HuggingFace fields being read correctly?
-- Weight loading — are weights mapped to the right layer names and shapes?
-- RoPE / positional embeddings — frequency base, scaling, and dimension handling are common sources of silent errors
-
-**Regression**
-The model used to pass and now fails after a code change. Look first at:
-- Recent kernel changes — a compute kernel (attention, matmul, softmax) may have introduced a numerical error
-- Operator dispatch — a new code path may have been selected that behaves differently
-- Quantization or dtype handling changes
-
-Knowing which class you're in tells you where to spend your first 10 minutes.
+The two paths activate different components. Text-only is simpler and
+eliminates the vision encoder from the picture — start there unless
+the reported bug is specifically in visual understanding.
 
 ## The Toolbox
 
-These tools live under `max/tests/integration/tools/` and `max/tests/integration/accuracy/`.
-Don't rely on exact CLI signatures — those change. Know what each tool *does*.
+These tools live under `max/tests/integration/tools/`.
+Know what each tool does — don't rely on specific CLI arguments, those change.
 
 ### `debug_model`
-Runs a single pipeline (MAX or torch) and dumps intermediate layer tensors to
-an output directory. This is the primary instrument for fine-grained comparison.
-By default it runs with only 1 hidden layer — keep it that way until you need more.
-Supports text prompts and image inputs for multimodal models.
+Runs a pipeline (MAX or torch) and dumps intermediate layer tensors to an
+output directory. This is the primary instrument. Run it once for torch,
+once for MAX, then compare. By default it runs with only 1 hidden layer —
+keep it that way while isolating the problem.
 
 ### `compare_tensors`
 Loads a pair of tensor files — one from torch (`.pt`), one from MAX (`.max`) —
 and computes numerical difference metrics: max absolute difference, max relative
-difference, and optionally a pass/fail against tolerances. Use this after
-running `debug_model` on both frameworks to see which layers diverge.
-
-### `generate_llm_logits`
-Runs the full model end-to-end and saves the final logits to a JSON file.
-Use this for a coarse check: if logits match, you're done. If not, you have
-a baseline divergence to explain before drilling deeper.
-
-### `verify` / `verify_pipelines`
-Compares two logit JSON files (one from MAX, one from torch) using multiple
-metrics: element-wise tolerance, cosine distance, and KL divergence.
-`verify_pipelines` is the full automated pipeline; `verify` is the comparison step alone.
-
-### `bisect_smoke_test`
-Binary-searches across the model's layers to find the first layer where MAX
-and torch diverge. Useful once you know *that* there's a divergence but not *where*.
-Saves time compared to checking every layer manually.
+difference, and optionally a pass/fail against tolerances.
 
 ### `hf_config_overrides`
-Applies temporary overrides to the HuggingFace model config without changing
-model files. Use this to isolate variables: reduce the number of layers,
-change head counts, override RoPE parameters, etc.
+Applies temporary overrides to the HuggingFace model config without touching
+model files. Use this to reduce layers, override RoPE parameters, swap head
+counts, or otherwise control variables while reproducing the bug.
 
 ## Debugging Strategy
 
-**Start as simple as possible.** One layer, one decode step, default prompt.
-A bug that exists with 1 layer exists with 32 layers — and is much faster to iterate on.
+We know the model is wrong. The question is *where*.
 
-**Coarse before fine.** Compare final logits first with `generate_llm_logits` + `verify`.
-If logits match within tolerance, the model is correct. If not, move to intermediate tensors.
+**Start with 1 layer and 1 decode step.** A bug that exists in a 1-layer
+model exists in a 32-layer model — and iterates 10x faster.
 
-**Intermediate tensors narrow the layer.** Run `debug_model` on both frameworks
-with output paths, then use `compare_tensors` to walk through layers.
-The first layer where tensors diverge is your target.
+**Run `debug_model` on both frameworks and direct output to disk.**
+Then walk through the intermediate tensors with `compare_tensors`.
+The first layer where tensors diverge is your target. Work forward from
+the model inputs — embedding outputs, attention inputs/outputs, MLP
+inputs/outputs — until you see the divergence appear.
 
-**Bisect if layer count is large.** `bisect_smoke_test` automates the binary
-search so you don't have to manually check each layer.
+**When you find the diverging layer, read the Python implementation.**
+Compare it directly against the HuggingFace reference implementation.
+Look for subtle differences that are easy to miss:
+- Wrong axis in a reshape or transpose
+- A missing or extra normalization step
+- An operation applied in the wrong order
 
-**For regressions: check git history.** If you know the last good commit,
-`git bisect` on the kernel or operator code is often faster than any tool above.
+**Config and weight loading are common culprits for brand-new models.**
+If tensors diverge from the very first layer, suspect:
+- A HuggingFace config field being silently misread or defaulted
+- Weights loaded under wrong names or with wrong shapes
+- A tied-embedding or bias term that exists in torch but not MAX (or vice versa)
 
-**For new models: read the reference config carefully.** Subtle differences —
-`rope_theta`, `rope_scaling` type, tied embeddings, normalization placement —
-are the most common source of correctness bugs in new architecture implementations.
-Compare the HuggingFace `config.json` against what the MAX pipeline is actually using.
+**RoPE is the most common source of silent errors in attention.**
+Check: frequency base (`rope_theta`), scaling type and factor, which
+dimensions RoPE is applied to, and whether the implementation matches
+the model's variant (standard, linear, dynamic, Llama-3 style, etc.).
+A wrong RoPE produces plausible-looking but incorrect outputs — it will
+not crash, so it can go unnoticed until tensor comparison.
+
+**Normalization placement matters.** Pre-norm vs. post-norm, whether the
+final layer norm is applied, and whether layer norms share weights are all
+architecture details that differ between model families and are easy to copy
+incorrectly.
 
 ## Reading the Results
 
 A divergence that grows with layer depth suggests an **accumulating error** —
-often positional embeddings or normalization. A divergence that appears sharply
-at one layer suggests a **local implementation bug** in that layer's operator.
+positional embeddings and normalization are the first suspects.
 
-Large absolute differences with small relative differences can indicate a
-scale issue. Large relative differences on near-zero values are often noise
-and may not matter for final output quality — check the logits, not just
-intermediate tensors, to decide if it's worth pursuing.
+A divergence that appears sharply at one layer suggests a **local bug** in
+that layer's operator — a wrong formula, wrong axis, or missing term.
 
-Cosine distance is often the most stable metric for comparing distributions.
-KL divergence amplifies errors in the tail of the softmax. Use both.
+Large absolute differences with small relative differences often point to a
+scale issue (wrong normalization or missing weight scaling). Prioritize layers
+with large absolute differences — they are more likely to affect final outputs.
