@@ -66,24 +66,6 @@ from .model_config import DeepseekV3_2Config
 def _unpack_kv_collections(
     kv_collections: Sequence[PagedCacheValues],
 ) -> tuple[
-    list[BufferValue], list[TensorValue], list[TensorValue], list[TensorValue]
-]:
-    """Unpack KV collections into component lists.
-
-    Returns:
-        Tuple of (kv_blocks, cache_lengths, lookup_tables, max_lengths).
-    """
-    return (
-        [kv.kv_blocks for kv in kv_collections],
-        [kv.cache_lengths for kv in kv_collections],
-        [kv.lookup_table for kv in kv_collections],
-        [kv.max_lengths for kv in kv_collections],
-    )
-
-
-def _unpack_kv_collections_with_scales(
-    kv_collections: Sequence[PagedCacheValues],
-) -> tuple[
     list[BufferValue],
     list[TensorValue],
     list[TensorValue],
@@ -91,13 +73,22 @@ def _unpack_kv_collections_with_scales(
     list[BufferValue],
 ]:
     """Unpack KV collections into component lists.
+
+    Handles both with-scales and without-scales cases uniformly.
 
     Returns:
         Tuple of (kv_blocks, cache_lengths, lookup_tables, max_lengths, kv_scales).
+        kv_scales is an empty list when scales are not present.
     """
-    for kv in kv_collections:
-        assert kv.kv_scales is not None
-    kv_scales = cast(list[BufferValue], [kv.kv_scales for kv in kv_collections])
+    kv_scales: list[BufferValue]
+    if kv_collections[0].kv_scales is not None:
+        for kv in kv_collections:
+            assert kv.kv_scales is not None
+        kv_scales = cast(
+            list[BufferValue], [kv.kv_scales for kv in kv_collections]
+        )
+    else:
+        kv_scales = []
     return (
         [kv.kv_blocks for kv in kv_collections],
         [kv.cache_lengths for kv in kv_collections],
@@ -547,41 +538,21 @@ class DeepseekV3_2(Module):
             )
 
         # Unpack KV collections once for use throughout the method
-        mla_kv_scales: list[BufferValue]
-        if mla_kv_collections[0].kv_scales is not None:
-            (
-                mla_kv_blocks,
-                mla_cache_lengths,
-                mla_lookup_tables,
-                mla_max_lengths,
-                mla_kv_scales,
-            ) = _unpack_kv_collections_with_scales(mla_kv_collections)
-        else:
-            (
-                mla_kv_blocks,
-                mla_cache_lengths,
-                mla_lookup_tables,
-                mla_max_lengths,
-            ) = _unpack_kv_collections(mla_kv_collections)
-            mla_kv_scales = []
+        (
+            mla_kv_blocks,
+            mla_cache_lengths,
+            mla_lookup_tables,
+            mla_max_lengths,
+            mla_kv_scales,
+        ) = _unpack_kv_collections(mla_kv_collections)
 
-        indexer_kv_scales: list[BufferValue]
-        if indexer_kv_collections[0].kv_scales is not None:
-            (
-                indexer_kv_blocks,
-                indexer_cache_lengths,
-                indexer_lookup_tables,
-                indexer_max_lengths,
-                indexer_kv_scales,
-            ) = _unpack_kv_collections_with_scales(indexer_kv_collections)
-        else:
-            (
-                indexer_kv_blocks,
-                indexer_cache_lengths,
-                indexer_lookup_tables,
-                indexer_max_lengths,
-            ) = _unpack_kv_collections(indexer_kv_collections)
-            indexer_kv_scales = []
+        (
+            indexer_kv_blocks,
+            indexer_cache_lengths,
+            indexer_lookup_tables,
+            indexer_max_lengths,
+            indexer_kv_scales,
+        ) = _unpack_kv_collections(indexer_kv_collections)
 
         # Extract dispatch metadata from MLA KV collections.
         mla_decode_scalar_args: list[TensorValue] | None = None
@@ -592,88 +563,61 @@ class DeepseekV3_2(Module):
                 if kv.dispatch_metadata is not None
             ]
 
-        subgraph_input_types: list[Type[Any] | list[Type[Any]]] = [
-            TensorType(DType.uint32, shape=(), device=DeviceRef.CPU()),
-            [hidden.type for hidden in h],
-            [signal_buffer.type for signal_buffer in signal_buffers],
-            [block.type for block in mla_kv_blocks],
-            [length.type for length in mla_cache_lengths],
-            [table.type for table in mla_lookup_tables],
-            [length.type for length in mla_max_lengths],
-            [scale.type for scale in mla_kv_scales],
-            [block.type for block in indexer_kv_blocks],
-            [length.type for length in indexer_cache_lengths],
-            [table.type for table in indexer_lookup_tables],
-            [length.type for length in indexer_max_lengths],
-            [scale.type for scale in indexer_kv_scales],
-            [freq.type for freq in freqs_cis],
-            [val.type for val in mla_prefill_metadata_flat],
-            [offset.type for offset in input_row_offsets_],
-        ]
+        subgraphs, layer_to_subgraph = self._build_subgraphs(
+            h,
+            signal_buffers,
+            mla_kv_blocks,
+            mla_cache_lengths,
+            mla_lookup_tables,
+            mla_max_lengths,
+            mla_kv_scales,
+            indexer_kv_blocks,
+            indexer_cache_lengths,
+            indexer_lookup_tables,
+            indexer_max_lengths,
+            indexer_kv_scales,
+            freqs_cis,
+            mla_prefill_metadata_flat,
+            input_row_offsets_,
+            mla_decode_scalar_args,
+        )
 
+        # Pre-pack optional args that appear in both subgraph and direct calls
+        optional_args: tuple[Value[Any], ...] = ()
         if mla_decode_scalar_args is not None:
-            subgraph_input_types.append(
-                [m.type for m in mla_decode_scalar_args]
-            )
-
-        if self.ep_manager is not None:
-            subgraph_input_types.append(list(self.ep_manager.input_types()))
-
-        subgraphs = []
-        for group_idx, layer_group in enumerate(self.subgraph_layer_groups):
-            assert len(layer_group) > 0, (
-                "Subgraph layer groups must contain at least one layer"
-            )
-            subgraph_layer = self.layers[layer_group[0]]
-            assert isinstance(subgraph_layer, DeepseekV3_2DecoderLayer), (
-                "Subgraph layer must be a DeepseekV3_2DecoderLayer"
-            )
-            subgraphs.append(
-                subgraph_layer.build_subgraph(
-                    f"dist_transformer_block_{group_idx}",
-                    subgraph_input_types,
-                    f"layers.{layer_group[0]}.",
-                )
-            )
+            optional_args += tuple(mla_decode_scalar_args)
+        if ep_inputs is not None:
+            optional_args += tuple(ep_inputs)
 
         for idx, layer in enumerate(self.layers):
-            has_subgraph = False
-            for group_idx, layer_group in enumerate(self.subgraph_layer_groups):
-                if idx in layer_group:
-                    has_subgraph = True
-                    h = [
-                        x.tensor
-                        for x in ops.call(
-                            subgraphs[group_idx],
-                            ops.constant(
-                                idx, DType.uint32, device=DeviceRef.CPU()
-                            ),
-                            *h,
-                            *signal_buffers,
-                            *mla_kv_blocks,
-                            *mla_cache_lengths,
-                            *mla_lookup_tables,
-                            *mla_max_lengths,
-                            *mla_kv_scales,
-                            *indexer_kv_blocks,
-                            *indexer_cache_lengths,
-                            *indexer_lookup_tables,
-                            *indexer_max_lengths,
-                            *indexer_kv_scales,
-                            *freqs_cis,
-                            *mla_prefill_metadata_flat,
-                            *input_row_offsets_,
-                            *(
-                                mla_decode_scalar_args
-                                if mla_decode_scalar_args is not None
-                                else ()
-                            ),
-                            *(ep_inputs if ep_inputs is not None else ()),
-                            prefix=f"layers.{idx}.",
-                        )
-                    ]
-                    break
-            if not has_subgraph:
+            if idx in layer_to_subgraph:
+                h = [
+                    x.tensor
+                    for x in ops.call(
+                        subgraphs[layer_to_subgraph[idx]],
+                        ops.constant(
+                            idx, DType.uint32, device=DeviceRef.CPU()
+                        ),
+                        *h,
+                        *signal_buffers,
+                        *mla_kv_blocks,
+                        *mla_cache_lengths,
+                        *mla_lookup_tables,
+                        *mla_max_lengths,
+                        *mla_kv_scales,
+                        *indexer_kv_blocks,
+                        *indexer_cache_lengths,
+                        *indexer_lookup_tables,
+                        *indexer_max_lengths,
+                        *indexer_kv_scales,
+                        *freqs_cis,
+                        *mla_prefill_metadata_flat,
+                        *input_row_offsets_,
+                        *optional_args,
+                        prefix=f"layers.{idx}.",
+                    )
+                ]
+            else:
                 h = layer(
                     ops.constant(idx, DType.uint32, device=DeviceRef.CPU()),
                     h,
@@ -696,23 +640,116 @@ class DeepseekV3_2(Module):
                 )
                 assert isinstance(h, list)
 
-        if self.config.data_parallel_degree > 1:
-            last_token_per_dev: list[TensorValue] = []
-            for dev_idx in range(len(devices)):
-                h0 = h[dev_idx]
-                last_token_indices = input_row_offsets_[dev_idx][1:] - 1
-                last_token_h = ops.gather(h0, last_token_indices, axis=0)
-                last_token_per_dev.append(last_token_h)
-            last_token_distributed = ops.allgather(
-                last_token_per_dev, signal_buffers
-            )
-        else:
-            last_token_distributed = [
-                ops.gather(h_i, offsets_i[1:] - 1, axis=0)
-                for h_i, offsets_i in zip(h, input_row_offsets_, strict=True)
-            ]
+        last_token_distributed = self._gather_last_tokens(
+            h, input_row_offsets_, signal_buffers
+        )
 
-        # Apply norm to each shard
+        return self._compute_logits(
+            h,
+            last_token_distributed,
+            signal_buffers,
+            return_n_logits,
+            input_row_offsets_,
+        )
+
+    def _build_subgraphs(
+        self,
+        h: list[TensorValue],
+        signal_buffers: list[BufferValue],
+        mla_kv_blocks: list[BufferValue],
+        mla_cache_lengths: list[TensorValue],
+        mla_lookup_tables: list[TensorValue],
+        mla_max_lengths: list[TensorValue],
+        mla_kv_scales: list[BufferValue],
+        indexer_kv_blocks: list[BufferValue],
+        indexer_cache_lengths: list[TensorValue],
+        indexer_lookup_tables: list[TensorValue],
+        indexer_max_lengths: list[TensorValue],
+        indexer_kv_scales: list[BufferValue],
+        freqs_cis: list[TensorValue],
+        mla_prefill_metadata_flat: list[TensorValue],
+        input_row_offsets: list[TensorValue],
+        mla_decode_scalar_args: list[TensorValue] | None,
+    ) -> tuple[list[Any], dict[int, int]]:
+        """Build subgraphs and a layer-index-to-subgraph-index lookup map."""
+        subgraph_input_types: list[Type[Any] | list[Type[Any]]] = [
+            TensorType(DType.uint32, shape=(), device=DeviceRef.CPU()),
+            [hidden.type for hidden in h],
+            [signal_buffer.type for signal_buffer in signal_buffers],
+            [block.type for block in mla_kv_blocks],
+            [length.type for length in mla_cache_lengths],
+            [table.type for table in mla_lookup_tables],
+            [length.type for length in mla_max_lengths],
+            [scale.type for scale in mla_kv_scales],
+            [block.type for block in indexer_kv_blocks],
+            [length.type for length in indexer_cache_lengths],
+            [table.type for table in indexer_lookup_tables],
+            [length.type for length in indexer_max_lengths],
+            [scale.type for scale in indexer_kv_scales],
+            [freq.type for freq in freqs_cis],
+            [val.type for val in mla_prefill_metadata_flat],
+            [offset.type for offset in input_row_offsets],
+        ]
+
+        if mla_decode_scalar_args is not None:
+            subgraph_input_types.append(
+                [m.type for m in mla_decode_scalar_args]
+            )
+
+        if self.ep_manager is not None:
+            subgraph_input_types.append(list(self.ep_manager.input_types()))
+
+        subgraphs = []
+        layer_to_subgraph: dict[int, int] = {}
+        for group_idx, layer_group in enumerate(self.subgraph_layer_groups):
+            assert len(layer_group) > 0, (
+                "Subgraph layer groups must contain at least one layer"
+            )
+            subgraph_layer = self.layers[layer_group[0]]
+            assert isinstance(subgraph_layer, DeepseekV3_2DecoderLayer), (
+                "Subgraph layer must be a DeepseekV3_2DecoderLayer"
+            )
+            subgraphs.append(
+                subgraph_layer.build_subgraph(
+                    f"dist_transformer_block_{group_idx}",
+                    subgraph_input_types,
+                    f"layers.{layer_group[0]}.",
+                )
+            )
+            for layer_idx in layer_group:
+                layer_to_subgraph[layer_idx] = group_idx
+
+        return subgraphs, layer_to_subgraph
+
+    def _gather_last_tokens(
+        self,
+        h: list[TensorValue],
+        input_row_offsets: list[TensorValue],
+        signal_buffers: list[BufferValue],
+    ) -> list[TensorValue]:
+        """Gather last-token hidden states, with allgather for data-parallel."""
+        if self.config.data_parallel_degree > 1:
+            last_token_per_dev = [
+                ops.gather(h[i], input_row_offsets[i][1:] - 1, axis=0)
+                for i in range(len(self.config.devices))
+            ]
+            return ops.allgather(last_token_per_dev, signal_buffers)
+        return [
+            ops.gather(h_i, offsets_i[1:] - 1, axis=0)
+            for h_i, offsets_i in zip(h, input_row_offsets, strict=True)
+        ]
+
+    def _compute_logits(
+        self,
+        h: list[TensorValue],
+        last_token_distributed: list[TensorValue],
+        signal_buffers: list[BufferValue],
+        return_n_logits: TensorValue,
+        input_row_offsets: list[TensorValue],
+    ) -> tuple[TensorValue, ...]:
+        """Compute last-token logits, optional variable/all logits, and hidden states."""
+        devices = self.config.devices
+
         norm_last_token = forward_sharded_layers(
             self.norm_shards, last_token_distributed
         )
@@ -734,7 +771,7 @@ class DeepseekV3_2(Module):
                 device=devices[0],
             )
             offsets = (
-                ops.unsqueeze(input_row_offsets_[0][1:], -1)
+                ops.unsqueeze(input_row_offsets[0][1:], -1)
                 - return_n_logits_range
             )
             last_indices = ops.reshape(offsets, shape=(-1,))
@@ -765,7 +802,7 @@ class DeepseekV3_2(Module):
                 )[0],
                 DType.float32,
             )
-            offsets = input_row_offsets_[0]
+            offsets = input_row_offsets[0]
 
         if self.logits_scaling != 1.0:
             last_logits = last_logits / self.logits_scaling
