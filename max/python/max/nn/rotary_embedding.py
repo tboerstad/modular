@@ -509,8 +509,8 @@ def _yarn_find_correction_dim(
 
 
 def _yarn_find_correction_range(
-    low_rot: TensorValue,
-    high_rot: TensorValue,
+    low_rot: float | TensorValue,
+    high_rot: float | TensorValue,
     dim: int,
     base: float,
     max_position_embeddings: int,
@@ -518,8 +518,8 @@ def _yarn_find_correction_range(
     """Finds the low and high correction dimension range for YaRN.
 
     Args:
-        low_rot: The low rotation boundary tensor.
-        high_rot: The high rotation boundary tensor.
+        low_rot: The low rotation boundary (scalar or tensor).
+        high_rot: The high rotation boundary (scalar or tensor).
         dim: The embedding dimension.
         base: The base for exponential frequency scaling.
         max_position_embeddings: The maximum number of position embeddings.
@@ -528,6 +528,14 @@ def _yarn_find_correction_range(
         A tuple of ``(low, high)`` correction dimension tensors, clamped
         to ``[0, dim - 1]``.
     """
+    if not isinstance(low_rot, TensorValue):
+        low_rot = ops.constant(
+            low_rot, dtype=DType.float32, device=DeviceRef.CPU()
+        )
+    if not isinstance(high_rot, TensorValue):
+        high_rot = ops.constant(
+            high_rot, dtype=DType.float32, device=DeviceRef.CPU()
+        )
     low = ops.floor(
         _yarn_find_correction_dim(
             low_rot, dim, base, max_position_embeddings
@@ -688,18 +696,10 @@ class DeepseekYarnRotaryEmbedding(RotaryEmbedding):
         freq_inter = 1.0 / (self.scaling_params.scaling_factor * freq_base)
 
         low, high = _yarn_find_correction_range(
-            ops.constant(
-                self.scaling_params.beta_fast,
-                dtype=DType.float32,
-                device=DeviceRef.CPU(),
-            ),
-            ops.constant(
-                self.scaling_params.beta_slow,
-                dtype=DType.float32,
-                device=DeviceRef.CPU(),
-            ),
+            self.scaling_params.beta_fast,
+            self.scaling_params.beta_slow,
             self.dim,
-            int(self.theta),  # Explicitly convert base to int
+            int(self.theta),
             self.scaling_params.original_max_position_embeddings,
         )
 
@@ -939,11 +939,6 @@ class YarnRotaryEmbedding(RotaryEmbedding):
         interleaved: bool = True,
         scaling_params: YarnScalingParams | None = None,
     ) -> None:
-        # For YARN, we need to compute custom frequencies before calling super().__init__
-        if scaling_params is not None:
-            self.scaling_params = scaling_params
-            # We'll override freqs_cis_base to compute YARN frequencies
-
         super().__init__(
             dim,
             n_heads,
@@ -953,6 +948,7 @@ class YarnRotaryEmbedding(RotaryEmbedding):
             _freqs_cis,
             interleaved,
         )
+        self.scaling_params = scaling_params
 
     def freqs_cis_base(self) -> TensorValue:
         """Computes the frequency cosine-sine tensor with YARN scaling applied.
@@ -993,10 +989,7 @@ class YarnRotaryEmbedding(RotaryEmbedding):
         if self.scaling_params is None:
             raise ValueError("scaling_params must be provided for YARN")
 
-        # Calculate rope dimension (considering head_dim if provided)
-        rope_dim = (
-            self.dim // self.n_heads if self.head_dim is None else self.head_dim
-        )
+        rope_dim = self.head_dim
         dim_2 = Dim(rope_dim // 2)
 
         # Base frequencies
@@ -1017,19 +1010,9 @@ class YarnRotaryEmbedding(RotaryEmbedding):
         )
 
         # Find correction range
-        low_rot = ops.constant(
-            self.scaling_params.beta_fast,
-            dtype=DType.float32,
-            device=DeviceRef.CPU(),
-        )
-        high_rot = ops.constant(
-            self.scaling_params.beta_slow,
-            dtype=DType.float32,
-            device=DeviceRef.CPU(),
-        )
         low, high = _yarn_find_correction_range(
-            low_rot,
-            high_rot,
+            self.scaling_params.beta_fast,
+            self.scaling_params.beta_slow,
             rope_dim,
             self.theta,
             self.scaling_params.original_max_position_embeddings,
