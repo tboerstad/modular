@@ -38,7 +38,6 @@ from ..kernels import (
     fused_qk_ragged_rope,
     fused_qkv_ragged_matmul,
     fused_qkv_ragged_matmul_quantized,
-    quantize_static_scaled_float8,
     rms_norm_key_cache,
     rope_split_store_ragged,
     unfused_qkv_ragged_matmul_gguf_quantized,
@@ -92,7 +91,6 @@ class AttentionWithRope(Module, Shardable):
         qk_norm_per_head: bool = True,
         qk_norm_multiply_before_cast: bool = True,
         norm_dtype: DType | None = None,
-        use_sinks: bool = False,
     ) -> None:
         """Initializes the attention layer.
 
@@ -123,7 +121,6 @@ class AttentionWithRope(Module, Shardable):
             qk_norm_multiply_before_cast: If True, multiply by weight before casting
                 (Gemma3-style). If False, cast first then multiply (Qwen3/Llama-style).
             norm_dtype: Separate dtype for Q/K norm weights. If None, uses dtype.
-            use_sinks: If True, creates a learnable sink attention weight per head.
         """
         super().__init__()
         self.rope = rope
@@ -149,7 +146,6 @@ class AttentionWithRope(Module, Shardable):
         self.qk_norm_per_head = qk_norm_per_head
         self.qk_norm_multiply_before_cast = qk_norm_multiply_before_cast
         self.norm_dtype = norm_dtype
-        self.use_sinks = use_sinks
         self._sharding_strategy: ShardingStrategy | None = None
 
         if self.use_qk_norm:
@@ -251,14 +247,6 @@ class AttentionWithRope(Module, Shardable):
             quant_config=quant_config,
         )
 
-        if use_sinks:
-            self.sinks = Weight(
-                name="sinks",
-                dtype=dtype,
-                shape=[num_attention_heads],
-                device=self.devices[0],
-            )
-
         if sharding_strategy is not None:
             self.sharding_strategy = sharding_strategy
 
@@ -301,10 +289,6 @@ class AttentionWithRope(Module, Shardable):
                 )
             )
 
-            if self.use_sinks:
-                self.sinks.sharding_strategy = ShardingStrategy.rowwise(
-                    num_devices
-                )
         elif strategy.is_replicate:
             self._sharding_strategy = strategy
 
@@ -327,10 +311,6 @@ class AttentionWithRope(Module, Shardable):
                 num_devices
             )
 
-            if self.use_sinks:
-                self.sinks.sharding_strategy = ShardingStrategy.replicate(
-                    num_devices
-                )
         else:
             raise ValueError(
                 "Only tensor-parallel (rowwise) or data-parallel (replicate) sharding strategies are supported for AttentionWithRope"
@@ -380,9 +360,6 @@ class AttentionWithRope(Module, Shardable):
             default_dtype = o_proj_shards[0].weight.dtype
             linear_cls = self.o_proj.__class__
 
-            if self.use_sinks:
-                sinks_shards = self.sinks.shard(devices)
-
             shards: list[AttentionWithRope] = []
             num_devices = len(devices)
             for n, device in enumerate(devices):
@@ -419,7 +396,6 @@ class AttentionWithRope(Module, Shardable):
                     qk_norm_per_head=self.qk_norm_per_head,
                     qk_norm_multiply_before_cast=self.qk_norm_multiply_before_cast,
                     norm_dtype=self.norm_dtype,
-                    use_sinks=self.use_sinks,
                 )
 
                 if self.stacked_qkv:
@@ -437,9 +413,6 @@ class AttentionWithRope(Module, Shardable):
                     )
                     layer.q_norm = q_norm_replicas[n]
                     layer.k_norm = k_norm_replicas[n]
-
-                if self.use_sinks:
-                    layer.sinks = sinks_shards[n]
 
                 shards.append(layer)
             return shards
@@ -461,9 +434,6 @@ class AttentionWithRope(Module, Shardable):
             else:
                 q_norm_replicas = None
                 k_norm_replicas = None
-
-            if self.use_sinks:
-                sinks_replicas = self.sinks.shard(devices)
 
             default_dtype = o_proj_replicas[0].weight.dtype
             linear_cls = self.o_proj.__class__
@@ -492,7 +462,6 @@ class AttentionWithRope(Module, Shardable):
                     qk_norm_per_head=self.qk_norm_per_head,
                     qk_norm_multiply_before_cast=self.qk_norm_multiply_before_cast,
                     norm_dtype=self.norm_dtype,
-                    use_sinks=self.use_sinks,
                 )
                 if self.stacked_qkv:
                     replica.qkv_proj = qkv_proj_replicas[i]
@@ -509,9 +478,6 @@ class AttentionWithRope(Module, Shardable):
                     )
                     replica.q_norm = q_norm_replicas[i]
                     replica.k_norm = k_norm_replicas[i]
-
-                if self.use_sinks:
-                    replica.sinks = sinks_replicas[i]
 
                 replicas.append(replica)
             return replicas
@@ -537,15 +503,6 @@ class AttentionWithRope(Module, Shardable):
                 wv = clamp(wv, min=-self.clip_qkv, max=self.clip_qkv)
 
             wqkv = ops.concat((wq, wk, wv))
-            if (
-                self.quant_config
-                and self.quant_config.is_static
-                and not self.stacked_qkv
-            ):
-                wqkv = quantize_static_scaled_float8(
-                    wqkv,
-                    self.qkv_weight_scale.to(DeviceRef.CPU()),
-                )
             return wqkv
 
     @property
@@ -805,11 +762,13 @@ class AttentionWithRope(Module, Shardable):
             )
             xq = xq.reshape((-1, self.n_heads, self.kv_params.head_dim))
 
-        # Flash attention with configurable mask and optional sinks.
+        # Flash attention with configurable mask.
         flash_kwargs: dict = {}
         if self.local_window_size:
             flash_kwargs["local_window_size"] = self.local_window_size
-        if self.use_sinks:
+        # Duck-type: subclasses (e.g. GptOssAttention) can add a `sinks`
+        # attribute and it will be picked up here via shard() propagation.
+        if hasattr(self, "sinks"):
             flash_kwargs["sink_weights"] = self.sinks
 
         attn_out = flash_attention_ragged(
@@ -1226,7 +1185,6 @@ class TensorParallelAttentionWithRope(
         qk_norm_per_head: bool = True,
         qk_norm_multiply_before_cast: bool = True,
         norm_dtype: DType | None = None,
-        use_sinks: bool = False,
     ) -> None:
         super().__init__(
             rope=rope,
@@ -1250,7 +1208,6 @@ class TensorParallelAttentionWithRope(
             qk_norm_per_head=qk_norm_per_head,
             qk_norm_multiply_before_cast=qk_norm_multiply_before_cast,
             norm_dtype=norm_dtype,
-            use_sinks=use_sinks,
         )
         if DeviceRef.CPU() in self.devices:
             raise ValueError(
@@ -1341,7 +1298,6 @@ class DataParallelAttentionWithRope(AttentionWithRope):
         qk_norm_per_head: bool = True,
         qk_norm_multiply_before_cast: bool = True,
         norm_dtype: DType | None = None,
-        use_sinks: bool = False,
     ) -> None:
         super().__init__(
             rope=rope,
@@ -1366,7 +1322,6 @@ class DataParallelAttentionWithRope(AttentionWithRope):
             qk_norm_per_head=qk_norm_per_head,
             qk_norm_multiply_before_cast=qk_norm_multiply_before_cast,
             norm_dtype=norm_dtype,
-            use_sinks=use_sinks,
         )
         if not self.devices:
             raise ValueError("devices cannot be None or empty")
@@ -1401,10 +1356,6 @@ class DataParallelAttentionWithRope(AttentionWithRope):
             self.k_norm.sharding_strategy = ShardingStrategy.replicate(
                 num_devices
             )
-        if self.use_sinks:
-            self.sinks.sharding_strategy = ShardingStrategy.replicate(
-                num_devices
-            )
         o_proj_replicas = self.o_proj.shard(self.devices)
 
         # Replicate Q/K RMSNorm weights if enabled.
@@ -1414,9 +1365,6 @@ class DataParallelAttentionWithRope(AttentionWithRope):
         else:
             q_norm_replicas = None
             k_norm_replicas = None
-
-        if self.use_sinks:
-            sinks_replicas = self.sinks.shard(self.devices)
 
         # Build one full copy per device (no head-splitting).
         self.replicated_attentions: list[AttentionWithRope] = []
@@ -1444,7 +1392,6 @@ class DataParallelAttentionWithRope(AttentionWithRope):
                 qk_norm_per_head=self.qk_norm_per_head,
                 qk_norm_multiply_before_cast=self.qk_norm_multiply_before_cast,
                 norm_dtype=self.norm_dtype,
-                use_sinks=self.use_sinks,
             )
             if self.stacked_qkv:
                 replica.qkv_proj = qkv_proj_replicas[i]
@@ -1460,9 +1407,6 @@ class DataParallelAttentionWithRope(AttentionWithRope):
                 )
                 replica.q_norm = q_norm_replicas[i]
                 replica.k_norm = k_norm_replicas[i]
-
-            if self.use_sinks:
-                replica.sinks = sinks_replicas[i]
 
             self.replicated_attentions.append(replica)
 
