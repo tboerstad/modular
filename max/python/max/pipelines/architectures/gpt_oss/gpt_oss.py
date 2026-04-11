@@ -38,7 +38,8 @@ from max.nn.transformer.distributed_transformer import (
     DistributedLogitsPostprocessMixin,
 )
 
-from .layers.attention import GptOssAttention
+from max.nn.attention import AttentionWithRope, MHAMaskVariant
+
 from .layers.moe import GptOssMoE
 from .layers.transformer_block import GptOssTransformerBlock
 from .model_config import GptOssConfig
@@ -119,20 +120,25 @@ class GptOssTextModel(DistributedLogitsPostprocessMixin, Module):
 
         layers = [
             GptOssTransformerBlock(
-                attention=GptOssAttention(
+                attention=AttentionWithRope(
                     rope=rope,
                     num_attention_heads=config.num_attention_heads,
                     num_key_value_heads=config.num_key_value_heads,
                     hidden_size=config.hidden_size,
                     kv_params=config.kv_params,
-                    layer_idx=i,
                     dtype=config.dtype,
                     devices=config.devices,
                     local_window_size=config.sliding_window,
                     has_bias=config.attention_bias,
-                    layer_type=config.layer_types[i]
-                    if i < len(config.layer_types)
-                    else "full_attention",
+                    mask_variant=(
+                        MHAMaskVariant.SLIDING_WINDOW_CAUSAL_MASK
+                        if (
+                            i < len(config.layer_types)
+                            and config.layer_types[i] == "sliding_attention"
+                        )
+                        else MHAMaskVariant.CAUSAL_MASK
+                    ),
+                    use_sinks=True,
                 ),
                 mlp=GptOssMoE(config),
                 input_layernorm=create_norm(),

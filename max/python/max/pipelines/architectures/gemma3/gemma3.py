@@ -31,7 +31,8 @@ from max.nn.transformer.distributed_transformer import (
     DistributedLogitsPostprocessMixin,
 )
 
-from .layers.attention import Gemma3Attention
+from max.nn.attention import AttentionWithRope, MHAMaskVariant
+
 from .layers.rms_norm import Gemma3RMSNorm
 from .layers.scaled_word_embedding import ScaledWordEmbedding
 from .layers.transformer_block import Gemma3TransformerBlock
@@ -116,21 +117,32 @@ class Gemma3TextModel(DistributedLogitsPostprocessMixin, Module):
             eps=config.rms_norm_eps,
         )
 
+        sliding_window_pattern = config.sliding_window_pattern
+
         layers = [
             Gemma3TransformerBlock(
-                attention=Gemma3Attention(
-                    rope_global=rope_global,
-                    rope_local=rope_local,
+                attention=AttentionWithRope(
+                    rope=(
+                        rope_local
+                        if bool((i + 1) % sliding_window_pattern)
+                        else rope_global
+                    ),
                     num_attention_heads=config.num_attention_heads,
                     num_key_value_heads=config.num_key_value_heads,
                     hidden_size=config.hidden_size,
                     kv_params=config.kv_params,
-                    layer_idx=i,
                     dtype=config.dtype,
                     devices=config.devices,
-                    qk_norm_eps=config.rms_norm_eps,
-                    local_window_size=config.sliding_window,
                     quant_config=config.quant_config,
+                    use_qk_norm=True,
+                    rms_norm_eps=config.rms_norm_eps,
+                    qk_norm_weight_offset=1.0,
+                    mask_variant=(
+                        MHAMaskVariant.SLIDING_WINDOW_CAUSAL_MASK
+                        if bool((i + 1) % sliding_window_pattern)
+                        else MHAMaskVariant.CAUSAL_MASK
+                    ),
+                    local_window_size=config.sliding_window,
                 ),
                 mlp=MLP(
                     dtype=config.dtype,

@@ -45,7 +45,7 @@ from max.nn.transformer.distributed_transformer import (
     ReturnLogits,
     forward_sharded_layers,
 )
-from max.pipelines.architectures.qwen3.layers.attention import Qwen3Attention
+from max.nn.attention import AttentionWithRope
 from max.pipelines.architectures.qwen3.layers.moe import Qwen3MoEGate
 from max.pipelines.architectures.qwen3.model_config import Qwen3Config
 
@@ -75,21 +75,23 @@ class Qwen3TransformerBlock(Module):
         self.use_dp = config.data_parallel_degree > 1
 
         # Create attention layer
-        self.self_attn = Qwen3Attention(
+        self.self_attn = AttentionWithRope(
+            rope=rope,
             num_attention_heads=config.num_attention_heads,
             num_key_value_heads=config.num_key_value_heads,
             hidden_size=config.hidden_size,
             kv_params=config.kv_params,
-            layer_idx=layer_idx,
             dtype=config.dtype,
-            rope=rope,
             linear_cls=linear_cls,
             devices=config.devices,
             scale=config.attention_multiplier,
             has_bias=config.attention_bias,
-            norm_dtype=config.norm_dtype or config.dtype,
             quant_config=config.quant_config,
+            use_qk_norm=True,
+            qk_norm_multiply_before_cast=False,
+            norm_dtype=config.norm_dtype or config.dtype,
         )
+        self._layer_idx = layer_idx
 
         if self.use_dp:
             self.self_attn.sharding_strategy = ShardingStrategy.replicate(

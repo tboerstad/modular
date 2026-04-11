@@ -20,7 +20,9 @@ from max.graph import (
     DeviceRef,
     ShardingStrategy,
     TensorValue,
+    ops,
 )
+from max.nn.attention import AttentionWithRope
 from max.nn.comm.allreduce import Allreduce
 from max.nn.kv_cache import PagedCacheValues
 from max.nn.layer import Module
@@ -28,7 +30,6 @@ from max.nn.transformer.distributed_transformer import (
     ShardableCallable,
     forward_sharded_layers,
 )
-from max.pipelines.architectures.gemma3.layers.attention import Gemma3Attention
 
 
 class Gemma3TransformerBlock(Module):
@@ -41,7 +42,7 @@ class Gemma3TransformerBlock(Module):
 
     def __init__(
         self,
-        attention: Gemma3Attention,
+        attention: AttentionWithRope,
         mlp: ShardableCallable,
         input_layernorm: ShardableCallable,
         post_attention_layernorm: ShardableCallable,
@@ -111,10 +112,13 @@ class Gemma3TransformerBlock(Module):
         norm_xs = forward_sharded_layers(self.input_layernorm_shards, xs)
         attn_out = [
             shard(
+                layer_idx,
                 norm_xs[i],
                 kv_collections[i],
-                input_row_offsets=input_row_offsets[i],
-                **kwargs,
+                ops.cast(shard.rope.freqs_cis, norm_xs[i].dtype).to(
+                    norm_xs[i].device
+                ),
+                input_row_offsets[i],
             )
             for i, shard in enumerate(self.self_attn_shards)
         ]

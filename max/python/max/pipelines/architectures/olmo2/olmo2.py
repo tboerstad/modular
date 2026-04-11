@@ -27,7 +27,7 @@ from max.nn.rotary_embedding import Llama3RotaryEmbedding
 from max.nn.transformer import Transformer
 from max.pipelines.architectures.llama3.llama3 import StackedMLP
 from max.pipelines.architectures.llama3.model_config import Llama3Config
-from max.pipelines.architectures.olmo2.layers.attention import Olmo2Attention
+from max.nn.attention import AttentionWithRope
 
 from .layers.transformer import Olmo2TransformerBlock
 
@@ -80,7 +80,7 @@ class Olmo2(Transformer):
             if config.stacked_mlp
             else functools.partial(MLP, quant_config=config.quant_config)
         )
-        attention_cls: Callable[..., Olmo2Attention]
+        attention_cls: Callable[..., AttentionWithRope]
         if config.model_quantization_encoding == QuantizationEncoding.GPTQ:
             assert config.quantization_config is not None
             assert not config.attention_bias, (
@@ -98,21 +98,22 @@ class Olmo2(Transformer):
             )
         else:
             attention_cls = functools.partial(
-                Olmo2Attention,
+                AttentionWithRope,
                 scale=config.attention_multiplier,
                 has_bias=config.attention_bias,
+                use_qk_norm=True,
+                qk_norm_per_head=False,
             )
 
         layers = [
             Olmo2TransformerBlock(
                 attention=attention_cls(
+                    rope=rope,
                     num_attention_heads=config.num_attention_heads,
                     num_key_value_heads=config.num_key_value_heads,
                     hidden_size=config.hidden_size,
                     kv_params=config.kv_params,
-                    layer_idx=i,
                     dtype=config.dtype,
-                    rope=rope,
                     linear_cls=linear_cls,
                     devices=config.devices,
                 ),
