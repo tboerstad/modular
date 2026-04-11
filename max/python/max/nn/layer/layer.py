@@ -44,38 +44,46 @@ from typing_extensions import Self
 from .._identity import IdentitySet
 
 
-class Shardable(Protocol):
-    """Protocol for objects that support sharding across multiple devices.
+class Shardable:
+    """Mixin for layers that support sharding across multiple devices.
 
-    This protocol defines the interface that all shardable components
-    (like Linear layers and Weight objects) must implement to participate
-    in distributed computation.
+    Provides a default ``sharding_strategy`` property and setter for the
+    common replicate-only case: the setter validates that only replicate
+    strategies are used and propagates the strategy to every
+    :class:`~max.graph.Weight` attribute on the layer.
+
+    Subclasses must still implement :meth:`shard` to create per-device
+    copies. Layers that need advanced strategies (row/column splits,
+    tensor parallelism) should also override the setter.
     """
 
     @property
     def sharding_strategy(self) -> ShardingStrategy | None:
-        """Gets the weight sharding strategy."""
-        ...
+        """Gets the sharding strategy for this layer."""
+        return getattr(self, "_sharding_strategy", None)
 
     @sharding_strategy.setter
     def sharding_strategy(self, strategy: ShardingStrategy) -> None:
-        """Sets the weight sharding strategy.
+        """Sets the sharding strategy.
+
+        The default implementation only accepts replicate strategies and
+        propagates the strategy to every :class:`~max.graph.Weight` attribute.
+        Override in layers that support non-replicate strategies.
 
         Args:
-            strategy: A ShardingStrategy that defines how to shard the weight.
+            strategy: The sharding strategy to apply.
+
+        Raises:
+            ValueError: If the strategy is not replicate.
         """
-        ...
-
-    def shard(self, devices: Iterable[DeviceRef]) -> Sequence[Self]:
-        """Creates a sharded view of this object for a specific device.
-
-        Args:
-            device: The devices where this shard should reside.
-
-        Returns:
-            A sequence of sharded instances of this object.
-        """
-        ...
+        if not strategy.is_replicate:
+            raise ValueError(
+                f"{type(self).__name__} only supports replicate strategy"
+            )
+        self._sharding_strategy = strategy
+        for attr_val in vars(self).values():
+            if isinstance(attr_val, (Weight, Shardable)):
+                attr_val.sharding_strategy = strategy
 
 
 class Layer:

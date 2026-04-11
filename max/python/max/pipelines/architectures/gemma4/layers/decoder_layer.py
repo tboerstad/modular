@@ -26,9 +26,8 @@ from max.graph import (
 )
 from max.nn.comm.allreduce import Allreduce
 from max.nn.kv_cache import PagedCacheValues
-from max.nn.layer import Module
+from max.nn.layer import Module, Shardable
 from max.nn.transformer.distributed_transformer import (
-    ShardableCallable,
     forward_sharded_layers,
 )
 from max.pipelines.architectures.gemma4.layers.attention import (
@@ -55,7 +54,7 @@ class Gemma4TextDecoderLayer(Module):
     def __init__(
         self,
         attention: Gemma4Attention,
-        mlp: ShardableCallable,
+        mlp: Shardable,
         hidden_size: int,
         rms_norm_eps: float,
         devices: list[DeviceRef],

@@ -18,7 +18,6 @@ from collections.abc import Iterable
 from max.dtype import DType
 from max.graph import (
     DeviceRef,
-    ShardingStrategy,
     TensorValue,
     Weight,
     ops,
@@ -195,28 +194,6 @@ class Conv2d(Module, Shardable):
             and self.filter.quantization_encoding is not None
         ):
             raise ValueError("Conv2d not implemented with weight quantization.")
-
-    @property
-    def sharding_strategy(self) -> ShardingStrategy | None:
-        """Get the Conv2d sharding strategy."""
-        # Always take the sharding strategy of the conv filter.
-        return self.filter.sharding_strategy
-
-    @sharding_strategy.setter
-    def sharding_strategy(self, strategy: ShardingStrategy) -> None:
-        """Set the sharding strategy for the conv layer.
-
-        Args:
-            strategy: The strategy describing the conv's sharding.
-        """
-        if not strategy.is_replicate:
-            raise ValueError(
-                "only replicate is supported for Conv2d, currently"
-            )
-
-        self.filter.sharding_strategy = strategy
-        if self.bias:
-            self.bias.sharding_strategy = strategy
 
     def shard(self, devices: Iterable[DeviceRef]) -> list[Conv2d]:
         """Creates sharded views of this Conv2d layer across multiple devices.

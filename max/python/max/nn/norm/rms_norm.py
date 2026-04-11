@@ -20,7 +20,6 @@ from collections.abc import Iterable, Sequence
 from max.dtype import DType
 from max.graph import (
     DeviceRef,
-    ShardingStrategy,
     TensorType,
     TensorValue,
     Weight,
@@ -68,7 +67,6 @@ class RMSNorm(Module, Shardable):
         self.eps = eps
         self.weight_offset = weight_offset
         self.multiply_before_cast = multiply_before_cast
-        self._sharding_strategy: ShardingStrategy | None = None
 
     def __call__(self, x: TensorValue) -> TensorValue:
         # Validate that weight dimension matches input's last dimension if
@@ -100,25 +98,6 @@ class RMSNorm(Module, Shardable):
             [TensorType(dtype=x.dtype, shape=x.shape, device=x.device)],
             parameters={"multiply_before_cast": self.multiply_before_cast},
         )[0].tensor
-
-    @property
-    def sharding_strategy(self) -> ShardingStrategy | None:
-        """Get the RMSNorm sharding strategy."""
-        return self._sharding_strategy
-
-    @sharding_strategy.setter
-    def sharding_strategy(self, strategy: ShardingStrategy) -> None:
-        """Set the sharding strategy for the RMSNorm layer.
-
-        Args:
-            strategy: The sharding strategy to apply.
-        """
-        # RMSNorm always uses replicate strategy
-        if not strategy.is_replicate:
-            raise ValueError("RMSNorm only supports replicate strategy")
-
-        self._sharding_strategy = strategy
-        self.weight.sharding_strategy = strategy
 
     def shard(self, devices: Iterable[DeviceRef]) -> Sequence[RMSNorm]:
         """Creates sharded views of this RMSNorm across multiple devices.
@@ -152,3 +131,4 @@ class RMSNorm(Module, Shardable):
             shards.append(sharded)
 
         return shards
+

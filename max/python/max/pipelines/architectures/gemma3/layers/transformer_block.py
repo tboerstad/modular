@@ -23,9 +23,8 @@ from max.graph import (
 )
 from max.nn.comm.allreduce import Allreduce
 from max.nn.kv_cache import PagedCacheValues
-from max.nn.layer import Module
+from max.nn.layer import Module, Shardable
 from max.nn.transformer.distributed_transformer import (
-    ShardableCallable,
     forward_sharded_layers,
 )
 from max.pipelines.architectures.gemma3.layers.attention import Gemma3Attention
@@ -42,17 +41,15 @@ class Gemma3TransformerBlock(Module):
     def __init__(
         self,
         attention: Gemma3Attention,
-        mlp: ShardableCallable,
-        input_layernorm: ShardableCallable,
-        post_attention_layernorm: ShardableCallable,
-        pre_feedforward_layernorm: ShardableCallable,
-        post_feedforward_layernorm: ShardableCallable,
+        mlp: Shardable,
+        input_layernorm: Shardable,
+        post_attention_layernorm: Shardable,
+        pre_feedforward_layernorm: Shardable,
+        post_feedforward_layernorm: Shardable,
         devices: list[DeviceRef],
     ) -> None:
         super().__init__()
 
-        # TODO: Figure out a better way to indicate to the type checker that these
-        # are Shardable Modules. (Probably need a protocol called ShardableModule)
         self.self_attn = attention
         self.self_attn.sharding_strategy = ShardingStrategy.tensor_parallel(
             len(devices)

@@ -49,7 +49,6 @@ from max.nn.quant_config import QuantConfig
 from max.nn.rotary_embedding import Llama3RotaryEmbedding
 from max.nn.transformer.distributed_transformer import (
     DistributedLogitsPostprocessMixin,
-    ShardableCallable,
     forward_sharded_layers,
 )
 from max.pipelines.architectures.llama3.model_config import Llama3Config
@@ -375,9 +374,9 @@ class Qwen25VLDecoderTransformerBlock(Module):
     def __init__(
         self,
         attention: Qwen25VLDecoderAttentionWithRope,
-        mlp: ShardableCallable,
-        attention_norm: ShardableCallable,
-        mlp_norm: ShardableCallable,
+        mlp: Shardable,
+        attention_norm: Shardable,
+        mlp_norm: Shardable,
         devices: list[DeviceRef],
     ) -> None:
         super().__init__()

@@ -433,29 +433,6 @@ class InternVisionEmbeddings(Module, Shardable):
             device=device or DeviceRef.CPU(),
         )
 
-    @property
-    def sharding_strategy(self) -> ShardingStrategy | None:
-        """Get the embedding sharding strategy."""
-        return self.patch_embedding.sharding_strategy
-
-    @sharding_strategy.setter
-    def sharding_strategy(self, strategy: ShardingStrategy) -> None:
-        """Set the sharding strategy for the patch, class, and position
-        embeddings.
-
-        Args:
-            strategy: The strategy describing the embeddings' sharding.
-        """
-        if not strategy.is_replicate:
-            raise ValueError(
-                "only replicate is supported for InternVisionEmbeddings, "
-                "currently"
-            )
-
-        self.patch_embedding.sharding_strategy = strategy
-        self.class_embedding.sharding_strategy = strategy
-        self.position_embedding.sharding_strategy = strategy
-
     def shard(
         self, devices: Iterable[DeviceRef]
     ) -> list[InternVisionEmbeddings]:

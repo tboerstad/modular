@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
 from itertools import islice
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 from max.dtype import DType
 from max.graph import (
@@ -52,12 +52,6 @@ from .transformer import (
 def take(it: Iterable[Value[Any]], n: int) -> list[Value[Any]]:
     """Return the next *n* items from *it* as a list."""
     return list(islice(it, n))
-
-
-# NOTE: This should eventually be deleted once Weight & Linear are refactored to assume
-# distributed by default.
-class ShardableCallable(Shardable, Protocol):
-    def __call__(self, x: TensorValue) -> TensorValue: ...
 
 
 def distributed_logits_postprocess(
@@ -214,9 +208,9 @@ class DistributedTransformerBlock(Module):
     def __init__(
         self,
         attention: Module,
-        mlp: ShardableCallable,
-        attention_norm: ShardableCallable,
-        mlp_norm: ShardableCallable,
+        mlp: Shardable,
+        attention_norm: Shardable,
+        mlp_norm: Shardable,
         devices: list[DeviceRef],
     ) -> None:
         super().__init__()
@@ -314,7 +308,7 @@ class DistributedTransformer(DistributedLogitsPostprocessMixin, Module):
         dim: int,
         n_heads: int,
         layers: list[DistributedTransformerBlock],
-        norm: ShardableCallable,
+        norm: Shardable,
         output: ColumnParallelLinear,
         embedding: VocabParallelEmbedding,
         kv_params: KVCacheParams,

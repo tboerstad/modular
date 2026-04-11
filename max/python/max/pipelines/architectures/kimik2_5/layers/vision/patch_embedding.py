@@ -31,7 +31,6 @@ import numpy as np
 from max.dtype import DType
 from max.graph import (
     DeviceRef,
-    ShardingStrategy,
     TensorValue,
     Weight,
     ops,
@@ -83,8 +82,6 @@ class Learnable2DInterpPosEmbDividedFixed(Module, Shardable):
         self.num_frames = num_frames
         self.dtype = dtype
         self.device = device
-        self._sharding_strategy: ShardingStrategy | None = None
-
         if not is_sharding:
             self.weight = Weight(
                 name="weight",
@@ -109,22 +106,6 @@ class Learnable2DInterpPosEmbDividedFixed(Module, Shardable):
         emb = np.concatenate([np.sin(out), np.cos(out)], axis=1)
         tw = ops.constant(emb, dtype=DType.float32, device=DeviceRef.CPU())
         return tw.to(self.device)
-
-    @property
-    def sharding_strategy(self) -> ShardingStrategy | None:
-        """Get the position embedding sharding strategy."""
-        return self._sharding_strategy
-
-    @sharding_strategy.setter
-    def sharding_strategy(self, strategy: ShardingStrategy) -> None:
-        """Set the sharding strategy. Only replication is supported."""
-        if not strategy.is_replicate:
-            raise ValueError(
-                "Learnable2DInterpPosEmbDividedFixed only supports replicate "
-                "sharding strategy"
-            )
-        self.weight.sharding_strategy = strategy
-        self._sharding_strategy = strategy
 
     def shard(
         self, devices: Iterable[DeviceRef]
@@ -231,8 +212,6 @@ class PatchEmbedding(Module, Shardable):
         self.init_pos_emb_time = init_pos_emb_time
         self.dtype = dtype
         self.has_bias = has_bias
-        self._sharding_strategy: ShardingStrategy | None = None
-
         if not is_sharding:
             # 1. Projection: Conv2d(in_dim, out_dim, kernel_size=patch_size, stride=patch_size)
             #    Matches reference exactly. permute=True for NCHW input -> NHWC internally.
@@ -256,22 +235,6 @@ class PatchEmbedding(Module, Shardable):
                 dtype=dtype,
                 device=device,
             )
-
-    @property
-    def sharding_strategy(self) -> ShardingStrategy | None:
-        """Get the patch embedding sharding strategy."""
-        return self._sharding_strategy
-
-    @sharding_strategy.setter
-    def sharding_strategy(self, strategy: ShardingStrategy) -> None:
-        """Set the sharding strategy. Only replication is supported."""
-        if not strategy.is_replicate:
-            raise ValueError(
-                "PatchEmbedding only supports replicate sharding strategy"
-            )
-        self.proj.sharding_strategy = strategy
-        self.pos_emb.sharding_strategy = strategy
-        self._sharding_strategy = strategy
 
     def shard(self, devices: Iterable[DeviceRef]) -> list[PatchEmbedding]:
         """Creates sharded views of this layer across devices (replicated)."""

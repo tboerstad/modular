@@ -21,7 +21,7 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 from max.dtype import DType
-from max.graph import DeviceRef, ShardingStrategy, TensorValue, Weight, ops
+from max.graph import DeviceRef, TensorValue, Weight, ops
 
 from ..layer import Module, Shardable
 
@@ -68,7 +68,6 @@ class LayerNorm(Module, Shardable):
         self.eps = eps
         self.dim = dims
         self.dtype = dtype
-        self._sharding_strategy: ShardingStrategy | None = None
 
     def __call__(self, input: TensorValue):
         # TODO: AIPIPE-95 Replace with a broadcasting rmo.layer_norm
@@ -87,27 +86,6 @@ class LayerNorm(Module, Shardable):
             beta=bias,
             epsilon=self.eps,
         ).cast(input.dtype)
-
-    @property
-    def sharding_strategy(self) -> ShardingStrategy | None:
-        """Get the LayerNorm sharding strategy."""
-        return self._sharding_strategy
-
-    @sharding_strategy.setter
-    def sharding_strategy(self, strategy: ShardingStrategy) -> None:
-        """Set the sharding strategy for the LayerNorm layer.
-
-        Args:
-            strategy: The sharding strategy to apply.
-        """
-        # LayerNorm currently only supports replicate strategy
-        if not strategy.is_replicate:
-            raise ValueError("LayerNorm only supports replicate strategy")
-
-        self._sharding_strategy = strategy
-        self.weight.sharding_strategy = strategy
-        if self.bias is not None:
-            self.bias.sharding_strategy = strategy
 
     def shard(self, devices: Iterable[DeviceRef]) -> Sequence[LayerNorm]:
         """Creates sharded views of this LayerNorm across multiple devices.
