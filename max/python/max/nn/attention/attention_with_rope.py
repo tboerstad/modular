@@ -29,7 +29,7 @@ from max.graph import (
 )
 from max.graph.quantization import QuantizationConfig, QuantizationEncoding
 from max.graph.weight import _compute_shard_range
-from max.nn.quant_config import QuantConfig
+from max.nn.quant_config import NVFP4Weight, QuantConfig
 
 from ..clamp import clamp
 from ..comm import Allreduce
@@ -564,6 +564,22 @@ class AttentionWithRope(Module, Shardable):
             )
         ).reshape(())
 
+    @property
+    def qkv_nvfp4(self) -> NVFP4Weight | None:
+        """Builds an :class:`NVFP4Weight` for the fused QKV projection.
+
+        Returns ``None`` when the layer is not using NVFP4 quantization.
+        """
+        weight_scale_2 = self.qkv_weight_scale_2
+        if weight_scale_2 is None:
+            return None
+        return NVFP4Weight(
+            weight=self.wqkv,
+            weight_scale=self.qkv_weight_scale,
+            weight_scale_2=weight_scale_2,
+            input_scale=self.qkv_input_scale,
+        )
+
     def __call__(
         self,
         layer_idx: TensorValue,
@@ -585,7 +601,7 @@ class AttentionWithRope(Module, Shardable):
                 weight_scale=self.qkv_weight_scale,
                 input_scale=self.qkv_input_scale,
                 quant_config=self.quant_config,
-                weight_scale_2=self.qkv_weight_scale_2,
+                nvfp4=self.qkv_nvfp4,
             )
         else:
             qkv = x @ wqkv.T

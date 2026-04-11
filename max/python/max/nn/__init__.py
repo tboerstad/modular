@@ -57,6 +57,7 @@ from .lora import AttentionWithRopeAndLoRA, LinearLoRA, SupportsLoRA
 from .moe import MoE, MoEGate, MoEQuantized
 from .norm import ConstantLayerNorm, GroupNorm, LayerNorm, RMSNorm
 from .quant_config import (
+    NVFP4Weight,
     InputScaleSpec,
     QuantConfig,
     QuantFormat,
@@ -132,6 +133,7 @@ __all__ = [
     "MoEQuantized",
     "Module",
     "MultiheadAttention",
+    "NVFP4Weight",
     "PagedCacheValues",
     "QuantConfig",
     "QuantFormat",

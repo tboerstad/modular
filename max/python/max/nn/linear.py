@@ -32,6 +32,7 @@ from max.graph import (
 )
 from max.graph.quantization import QuantizationConfig, QuantizationEncoding
 from max.nn.quant_config import (
+    NVFP4Weight,
     QuantConfig,
     ScaleGranularity,
     fp4_packed_k,
@@ -90,6 +91,9 @@ class Linear(Module, Shardable):
 
     weight_scale_2: Weight | None = None
     """The optional weight scale 2 used for fp4 quantization."""
+
+    _nvfp4: NVFP4Weight | None = None
+    """Bundled NVFP4 weight data, set when ``quant_config.is_nvfp4``."""
 
     device: DeviceRef
     """The device where matrix operations are performed."""
@@ -204,6 +208,12 @@ class Linear(Module, Shardable):
                     shape=(),
                     device=DeviceRef.CPU(),
                     quantization_encoding=quantization_encoding,
+                )
+                self._nvfp4 = NVFP4Weight(
+                    weight=self.weight,
+                    weight_scale=self.weight_scale,
+                    weight_scale_2=self.weight_scale_2,
+                    input_scale=self.input_scale,
                 )
 
     def _infer_weight_scale_shape(
@@ -447,6 +457,12 @@ class Linear(Module, Shardable):
                     and hasattr(self, "weight_scale_2")
                 ):
                     sharded.weight_scale_2 = self.weight_scale_2
+                    sharded._nvfp4 = NVFP4Weight(
+                        weight=sharded.weight,
+                        weight_scale=sharded.weight_scale,
+                        weight_scale_2=sharded.weight_scale_2,
+                        input_scale=sharded.input_scale,
+                    )
 
             shards.append(sharded)
 
@@ -478,7 +494,7 @@ class Linear(Module, Shardable):
             self.quant_config,
             self.input_scale,
             self.weight_scale,
-            self.weight_scale_2,
+            nvfp4=self._nvfp4,
         )
 
         if self.bias is not None:
@@ -493,7 +509,7 @@ def linear(
     quant_config: QuantConfig | None = None,
     input_scale: TensorValue | None = None,
     weight_scale: TensorValue | None = None,
-    weight_scale_2: TensorValue | None = None,
+    nvfp4: NVFP4Weight | None = None,
 ) -> TensorValue:
     """Computes x @ weight.T with quantization support."""
     if quantization_encoding is not None:
@@ -517,7 +533,7 @@ def linear(
             weight_scale,
             input_scale,
             quant_config,
-            weight_scale_2,
+            nvfp4=nvfp4,
         )
 
         if leading_dims is not None:
@@ -935,6 +951,23 @@ class MLP(Module, Shardable):
             self.gate_proj.weight_scale_2, self.up_proj.weight_scale_2
         )
 
+    def _fused_gate_up_nvfp4(self) -> NVFP4Weight | None:
+        """Constructs an :class:`NVFP4Weight` for the fused gate/up projection.
+
+        Returns ``None`` when the MLP is not using NVFP4 quantization.
+        """
+        if self.quant_config is None or not self.quant_config.is_nvfp4:
+            return None
+        weight_scale_2 = self._concat_or_max_gate_up_weight_scale_2()
+        input_scale = self._concat_or_max_gate_up_input_scale()
+        assert weight_scale_2 is not None
+        return NVFP4Weight(
+            weight=self._concat_or_max_gate_up_weights(),
+            weight_scale=self._concat_or_max_gate_up_scales(),
+            weight_scale_2=weight_scale_2,
+            input_scale=input_scale,
+        )
+
     def _can_used_fused_mlp(self) -> bool:
         """Checks if the gate/up matmuls can be fused."""
         if self.quantization_encoding:
@@ -967,7 +1000,7 @@ class MLP(Module, Shardable):
                 self.quant_config,
                 input_scale=self._concat_or_max_gate_up_input_scale(),
                 weight_scale=self._concat_or_max_gate_up_scales(),
-                weight_scale_2=self._concat_or_max_gate_up_weight_scale_2(),
+                nvfp4=self._fused_gate_up_nvfp4(),
             )
 
             bias = self._concat_or_max_gate_up_bias()

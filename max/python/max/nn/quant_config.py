@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from max.dtype import DType
-from max.graph import DeviceRef, Dim, DimLike, Shape, TensorType
+from max.graph import DeviceRef, Dim, DimLike, Shape, TensorType, TensorValue
 
 
 class ScaleGranularity(Enum):
@@ -73,6 +73,35 @@ class QuantFormat(Enum):
     BLOCKSCALED_FP8 = "blockscaled-fp8"
     NVFP4 = "nvfp4"
     MXFP4 = "mxfp4"
+
+
+@dataclass
+class NVFP4Weight:
+    """Bundled NVFP4 quantized weight with its scaling factors.
+
+    NVFP4 uses a two-level scaling scheme:
+
+    - **Per-block scales** (FP8 E4M3): scale groups of weight elements.
+    - **Global tensor scale** (FP32 scalar): scales the per-block scales.
+
+    Optionally includes a static input activation scale.
+    """
+
+    weight: TensorValue
+    """Packed FP4 weights stored as ``uint8``, shape ``(out_dim, in_dim // 2)``.
+    Two FP4 E2M1 values are packed per byte."""
+
+    weight_scale: TensorValue
+    """Per-block scale factors, dtype ``float8_e4m3fn``."""
+
+    weight_scale_2: TensorValue
+    """Global tensor-wide scale factor, dtype ``float32``, scalar.
+    Applied on top of the per-block scales."""
+
+    input_scale: TensorValue | None = None
+    """Optional static activation scale, dtype ``float32``, scalar.
+    Present only when using static quantization
+    (:attr:`ScaleOrigin.STATIC`)."""
 
 
 @dataclass
