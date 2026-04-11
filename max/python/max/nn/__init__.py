@@ -40,7 +40,6 @@ from .attention import (
 from .clamp import clamp
 from .comm import Allreduce, Signals
 from .conv import Conv1D, Conv2d, Conv3D
-from .conv_transpose import ConvTranspose1d, WeightNormConvTranspose1d
 from .data_parallelism import split_batch, split_batch_replicated
 from .embedding import Embedding, VocabParallelEmbedding
 from .identity import Identity
@@ -100,7 +99,6 @@ __all__ = [
     "Conv1D",
     "Conv2d",
     "Conv3D",
-    "ConvTranspose1d",
     "DistributedAttentionImpl",
     "DistributedTransformer",
     "DistributedTransformerBlock",
@@ -153,7 +151,6 @@ __all__ = [
     "Transformer",
     "TransformerBlock",
     "VocabParallelEmbedding",
-    "WeightNormConvTranspose1d",
     "WeightScaleSpec",
     "YarnRotaryEmbedding",
     "YarnScalingParams",

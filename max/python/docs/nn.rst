@@ -111,8 +111,6 @@ Convolution
    Conv1D
    Conv2d
    Conv3D
-   ConvTranspose1d
-   WeightNormConvTranspose1d
 
 Mixture of experts
 ------------------

@@ -101,7 +101,6 @@ modular_py_test(
         ["*_gpu.py"],
         exclude = [
             "*_distributed_gpu.py",
-            "test_conv_transpose_gpu.py",
             "test_linear_fp8_amd_gpu.py",
             "test_lora_kernels_gpu.py",
             "test_mlp_fp4_gpu.py",
@@ -133,28 +132,6 @@ modular_py_test(
         requirement("torch"),
         requirement("triton"),
         requirement("hypothesis"),
-    ],
-)
-
-modular_py_test(
-    name = "nn_nvidia_gpu_tests",
-    srcs = [
-        "test_conv_transpose_gpu.py",
-    ],
-    gpu_constraints = ["//:nvidia_gpu"],
-    imports = ["."],
-    tags = [
-        "gpu",
-    ],
-    deps = [
-        "//max/python/max/driver",
-        "//max/python/max/dtype",
-        "//max/python/max/engine",
-        "//max/python/max/graph",
-        "//max/python/max/nn",
-        "//max/tests/integration/test_common:numerics",
-        requirement("numpy"),
-        requirement("torch"),
     ],
 )
 
