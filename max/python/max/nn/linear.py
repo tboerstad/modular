@@ -41,6 +41,7 @@ from max.support.math import ceildiv
 from .activation import activation_function_from_name
 from .clamp import clamp
 from .layer import Module, Shardable
+from .model_context import ModelContext
 
 
 class Linear(Module, Shardable):
@@ -95,14 +96,15 @@ class Linear(Module, Shardable):
         self,
         in_dim: int,
         out_dim: int,
-        dtype: DType,
-        device: DeviceRef,
+        dtype: DType | None = None,
+        device: DeviceRef | None = None,
         has_bias: bool = False,
         quantization_encoding: QuantizationEncoding | None = None,
         quant_config: QuantConfig | None = None,
         name: str | None = None,
         clip_weight: float | None = None,
         is_sharding: bool = False,
+        ctx: ModelContext | None = None,
     ) -> None:
         """Initializes the linear layer with weights and optional bias.
 
@@ -110,8 +112,10 @@ class Linear(Module, Shardable):
             in_dim: The dimensionality of the input space.
             out_dim: The dimensionality of the output space.
             dtype: The :class:`~max.dtype.DType` for both weights and bias.
+                Can be omitted when ``ctx`` is provided.
             device: The target :class:`~max.graph.DeviceRef` for computation.
                 Weights remain on CPU until moved during computation.
+                Can be omitted when ``ctx`` is provided.
             name: Base name for weights (appended with ``.weight`` and
                 ``.bias`` if applicable).
             has_bias: When ``True``, adds a bias vector to the layer.
@@ -120,8 +124,27 @@ class Linear(Module, Shardable):
             quant_config: :class:`~max.nn.quant_config.QuantConfig` for scaled quantization.
             clip_weight: Optional weight clipping threshold.
             is_sharding: Disable child layer creation during sharding.
+            ctx: Optional :class:`~max.nn.ModelContext` providing default
+                values for ``dtype``, ``device``, ``quantization_encoding``,
+                and ``quant_config``. Explicit arguments override context values.
         """
         super().__init__()
+
+        if ctx is not None:
+            dtype = dtype or ctx.dtype
+            device = device or ctx.primary_device
+            if quantization_encoding is None:
+                quantization_encoding = ctx.quantization_encoding
+            if quant_config is None:
+                quant_config = ctx.quant_config
+        if dtype is None:
+            raise TypeError(
+                "dtype must be provided either directly or via ctx"
+            )
+        if device is None:
+            raise TypeError(
+                "device must be provided either directly or via ctx"
+            )
 
         self.device = device
         self.clip_weight = clip_weight
@@ -766,27 +789,29 @@ class MLP(Module, Shardable):
 
     def __init__(
         self,
-        dtype: DType,
-        quantization_encoding: QuantizationEncoding | None,
-        hidden_dim: int,
-        feed_forward_length: int,
-        devices: Sequence[DeviceRef],
+        dtype: DType | None = None,
+        quantization_encoding: QuantizationEncoding | None = None,
+        hidden_dim: int = 0,
+        feed_forward_length: int = 0,
+        devices: Sequence[DeviceRef] | None = None,
         linear_cls: Callable[..., Linear] = Linear,
         has_bias: bool = False,
         activation_function: str = "silu",
         quant_config: QuantConfig | None = None,
         is_sharding: bool = False,
+        ctx: ModelContext | None = None,
     ) -> None:
         """Initializes the MLP layer.
 
         Args:
             dtype: :class:`~max.dtype.DType` to use for the layer weights, which should match the
-                input dtype.
+                input dtype. Can be omitted when ``ctx`` is provided.
             quantization_encoding: :class:`~max.graph.quantization.QuantizationEncoding` of the layer weights.
             hidden_dim: The last dimension of the layer input.
             feed_forward_length: Size of dimension used to project the inputs.
             linear_cls: :class:`~max.nn.Linear` class to use to create the projection layers.
             devices: :class:`~max.graph.DeviceRef` devices to run the ``MLP`` layer.
+                Can be omitted when ``ctx`` is provided.
             has_bias: Whether to include bias terms in the linear layers.
             activation_function: Activation function to use. Options are:
 
@@ -799,8 +824,28 @@ class MLP(Module, Shardable):
 
             quant_config: :class:`~max.nn.quant_config.QuantConfig` for scaled quantization.
             is_sharding: Disable child layer creation during sharding.
+            ctx: Optional :class:`~max.nn.ModelContext` providing default
+                values for ``dtype``, ``devices``, ``quantization_encoding``,
+                and ``quant_config``. Explicit arguments override context values.
         """
         super().__init__()
+
+        if ctx is not None:
+            dtype = dtype or ctx.dtype
+            devices = devices or list(ctx.all_devices)
+            if quantization_encoding is None:
+                quantization_encoding = ctx.quantization_encoding
+            if quant_config is None:
+                quant_config = ctx.quant_config
+        if dtype is None:
+            raise TypeError(
+                "dtype must be provided either directly or via ctx"
+            )
+        if devices is None:
+            raise TypeError(
+                "devices must be provided either directly or via ctx"
+            )
+
         self.devices = devices
         self.num_devices = len(devices)
         self.hidden_dim = hidden_dim

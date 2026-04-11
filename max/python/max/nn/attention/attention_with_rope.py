@@ -60,6 +60,7 @@ from ..no_opaque_kernels import (
     store_k_cache,
     store_v_cache,
 )
+from ..model_context import ModelContext
 from ..rotary_embedding import RotaryEmbedding
 from .interfaces import DistributedAttentionImpl
 from .mask_config import MHAMaskVariant
@@ -82,7 +83,7 @@ class AttentionWithRope(Module, Shardable):
         hidden_size: int,
         kv_params: KVCacheParams,
         devices: Sequence[DeviceRef] | None = None,
-        dtype: DType = DType.float32,
+        dtype: DType | None = None,
         linear_cls: Callable[..., Linear] = Linear,
         stacked_qkv: bool = False,
         scale: float | None = None,
@@ -91,6 +92,7 @@ class AttentionWithRope(Module, Shardable):
         clip_qkv: float | None = None,
         use_qk_norm: bool = False,
         rms_norm_eps: float = 1e-6,
+        ctx: ModelContext | None = None,
     ) -> None:
         """Initializes the attention layer.
 
@@ -102,8 +104,10 @@ class AttentionWithRope(Module, Shardable):
             hidden_size: The dimension of the hidden states.
             kv_params: KV Cache params, including number of kv heads, head dim, and dtype.
             dtype: DType of the QKV and output projection weights.
+                Can be omitted when ``ctx`` is provided.
             devices: Device(s) on which to place the weights and run the computation. If multiple are
                 provided, the first device is used for weight placement here.
+                Can be omitted when ``ctx`` is provided.
             linear_cls: Linear class to use for projections.
             stacked_qkv: Whether Q/K/V weights are stacked in a single Weight.
             scale: Optional attention scale; defaults to sqrt(1/head_dim).
@@ -112,8 +116,22 @@ class AttentionWithRope(Module, Shardable):
             clip_qkv: If provided, clamp Q/K/V weights to [-clip_qkv, clip_qkv].
             use_qk_norm: Whether to use RMSNorm on Q/K.
             rms_norm_eps: Value to use for numerical stability in RMSNorm.
+            ctx: Optional :class:`~max.nn.ModelContext` providing default
+                values for ``dtype``, ``devices``, and ``quant_config``.
+                Explicit arguments override context values.
         """
         super().__init__()
+
+        if ctx is not None:
+            dtype = dtype or ctx.dtype
+            if devices is None:
+                devices = list(ctx.all_devices)
+            if quant_config is None:
+                quant_config = ctx.quant_config
+        # Preserve the original default for dtype when neither ctx nor explicit value.
+        if dtype is None:
+            dtype = DType.float32
+
         self.rope = rope
         self.n_heads = num_attention_heads
         self.num_key_value_heads = num_key_value_heads

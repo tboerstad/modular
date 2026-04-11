@@ -30,6 +30,7 @@ from max.nn.kv_cache import KVCacheParamInterface
 from max.nn.layer import Module
 from max.nn.linear import MLP, GPTQLinear, Linear
 from max.nn.lora import AttentionWithRopeAndLoRA
+from max.nn.model_context import ModelContext
 from max.nn.norm import ConstantLayerNorm, RMSNorm
 from max.nn.transformer import Transformer, TransformerBlock
 from max.pipelines.lib.lora import LoRAManager
@@ -40,15 +41,31 @@ from .model_config import Llama3Config, create_rope_embedding
 class StackedMLP(Module):
     def __init__(
         self,
-        dtype: DType,
-        quantization_encoding: QuantizationEncoding | None,
-        hidden_dim: int,
-        feed_forward_length: int,
-        devices: Sequence[DeviceRef],
-        linear_cls: Callable[..., Linear],
+        dtype: DType | None = None,
+        quantization_encoding: QuantizationEncoding | None = None,
+        hidden_dim: int = 0,
+        feed_forward_length: int = 0,
+        devices: Sequence[DeviceRef] | None = None,
+        linear_cls: Callable[..., Linear] = Linear,
         has_scale: bool = False,
+        ctx: ModelContext | None = None,
     ) -> None:
         super().__init__()
+
+        if ctx is not None:
+            dtype = dtype or ctx.dtype
+            devices = devices or list(ctx.all_devices)
+            if quantization_encoding is None:
+                quantization_encoding = ctx.quantization_encoding
+        if dtype is None:
+            raise TypeError(
+                "dtype must be provided either directly or via ctx"
+            )
+        if devices is None:
+            raise TypeError(
+                "devices must be provided either directly or via ctx"
+            )
+
         self.gate_up_proj = linear_cls(
             in_dim=hidden_dim,
             out_dim=feed_forward_length * 2,
@@ -110,6 +127,16 @@ class Llama3(Transformer):
                 config.norm_dtype or config.dtype,
             )
 
+        # Bundle common model parameters into a single context, inspired by
+        # MLX's approach of setting dtype/device once for the model hierarchy.
+        ctx = ModelContext(
+            dtype=config.dtype,
+            device=config.devices[0],
+            devices=config.devices,
+            quantization_encoding=config.model_quantization_encoding,
+            quant_config=config.quant_config,
+        )
+
         # Select linear layer class.
         linear_cls: Callable[..., Linear]
         if config.quantization_config:
@@ -124,11 +151,10 @@ class Llama3(Transformer):
             raise ValueError(
                 "StackedMLP and scaled quantization are not compatible"
             )
-        mlp_cls = (
-            StackedMLP
-            if config.stacked_mlp
-            else functools.partial(MLP, quant_config=config.quant_config)
-        )
+        # MLP class selection: ctx carries dtype, devices, quantization, and
+        # quant_config so the partial wrapper is no longer needed.
+        mlp_cls = StackedMLP if config.stacked_mlp else MLP
+
         attention_cls: Callable[..., AttentionWithRope]
         if config.model_quantization_encoding == QuantizationEncoding.GPTQ:
             assert config.quantization_config is not None
@@ -161,13 +187,14 @@ class Llama3(Transformer):
                 quant_config=config.quant_config,
             )
         else:
+            # ctx carries quant_config, so it can be omitted from the partial.
             attention_cls = functools.partial(
                 AttentionWithRope,
                 stacked_qkv=config.stacked_qkv,
                 scale=config.attention_multiplier,
                 clip_qkv=config.clip_qkv,
                 has_bias=config.attention_bias,
-                quant_config=config.quant_config,
+                ctx=ctx,
             )
 
         layers = [
@@ -183,12 +210,10 @@ class Llama3(Transformer):
                     devices=config.devices,
                 ),
                 mlp=mlp_cls(
-                    config.dtype,
-                    config.model_quantization_encoding,
-                    config.hidden_size,
-                    config.intermediate_size,
-                    config.devices,
-                    linear_cls,
+                    hidden_dim=config.hidden_size,
+                    feed_forward_length=config.intermediate_size,
+                    linear_cls=linear_cls,
+                    ctx=ctx,
                 ),
                 attention_norm=create_norm(),
                 mlp_norm=create_norm(),

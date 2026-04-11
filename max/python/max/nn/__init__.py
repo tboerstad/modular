@@ -54,6 +54,7 @@ from .kv_cache import (
 from .layer import Layer, LayerList, Module, Shardable
 from .linear import MLP, ColumnParallelLinear, GPTQLinear, Linear
 from .lora import AttentionWithRopeAndLoRA, LinearLoRA, SupportsLoRA
+from .model_context import ModelContext
 from .moe import MoE, MoEGate, MoEQuantized
 from .norm import ConstantLayerNorm, GroupNorm, LayerNorm, RMSNorm
 from .quant_config import (
@@ -126,6 +127,7 @@ __all__ = [
     "LongRoPERotaryEmbedding",
     "LongRoPEScalingParams",
     "MinPSampler",
+    "ModelContext",
     "MoE",
     "MoEGate",
     "MoEQuantized",

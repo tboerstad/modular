@@ -29,6 +29,7 @@ from max.graph.quantization import QuantizationEncoding
 from max.nn.comm.allreduce import Allreduce
 
 from .layer import Module
+from .model_context import ModelContext
 
 
 class Embedding(Module):
@@ -66,10 +67,11 @@ class Embedding(Module):
         self,
         vocab_size: int,
         hidden_dim: int,
-        dtype: DType,
-        device: DeviceRef,
+        dtype: DType | None = None,
+        device: DeviceRef | None = None,
         quantization_encoding: QuantizationEncoding | None = None,
         name: str | None = None,
+        ctx: ModelContext | None = None,
     ) -> None:
         """Initializes the embedding layer with the given arguments.
 
@@ -78,13 +80,32 @@ class Embedding(Module):
                 Indices must be in the range ``[0, vocab_size)``.
             hidden_dim: The dimensionality of each embedding vector.
             dtype: The data type of the embedding weights.
+                Can be omitted when ``ctx`` is provided.
             device: The device where embedding lookups are executed.
                 Model init transfers the initially CPU-resident weights to this
-                device.
+                device. Can be omitted when ``ctx`` is provided.
             quantization_encoding: Optional quantization encoding for the weights.
             name: The name identifier for the embedding weight matrix.
+            ctx: Optional :class:`~max.nn.ModelContext` providing default
+                values for ``dtype``, ``device``, and
+                ``quantization_encoding``. Explicit arguments override context
+                values.
         """
         super().__init__()
+
+        if ctx is not None:
+            dtype = dtype or ctx.dtype
+            device = device or ctx.primary_device
+            if quantization_encoding is None:
+                quantization_encoding = ctx.quantization_encoding
+        if dtype is None:
+            raise TypeError(
+                "dtype must be provided either directly or via ctx"
+            )
+        if device is None:
+            raise TypeError(
+                "device must be provided either directly or via ctx"
+            )
 
         self.device = device
         self.weight = Weight(
