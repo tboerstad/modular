@@ -48,7 +48,6 @@ from max.pipelines.lib import (
     ModelOutputs,
     PipelineConfig,
     PipelineModelWithKVCache,
-    upper_bounded_default,
 )
 from max.pipelines.lib.config.config_enums import (
     is_float4_encoding,
@@ -159,7 +158,7 @@ class KimiK2_5Model(
         return_hidden_states: ReturnHiddenStates = ReturnHiddenStates.NONE,
     ) -> None:
         if pipeline_config.model.device_specs[0] == DeviceSpec.cpu():
-            raise ValueError("DeepseekV2 currently only supported on gpu.")
+            raise ValueError("KimiK2_5 currently only supported on gpu.")
         self.session = session
         self._ve_cache: VisionEncoderCache[KimiK2_5TextAndVisionContext] = (
             VisionEncoderCache(
@@ -216,18 +215,10 @@ class KimiK2_5Model(
     def calculate_max_seq_len(
         cls, pipeline_config: PipelineConfig, huggingface_config: AutoConfig
     ) -> int:
-        try:
-            return upper_bounded_default(
-                upper_bound=huggingface_config.text_config.max_position_embeddings,
-                default=pipeline_config.model.max_length,
-            )
-        except ValueError as e:
-            raise ValueError(
-                "Unable to infer max_length for DeepseekV2, the provided "
-                f"max_length ({pipeline_config.model.max_length}) exceeds the "
-                f"model's max_seq_len "
-                f"({huggingface_config.text_config.max_position_embeddings})."
-            ) from e
+        return KimiK2_5TextConfig.calculate_max_seq_len(
+            pipeline_config=pipeline_config,
+            huggingface_config=huggingface_config.text_config,
+        )
 
     def _create_model_config(
         self, state_dict: dict[str, WeightData]
@@ -608,8 +599,8 @@ class KimiK2_5Model(
                     f"Key: {key} is not part of the vision or language model"
                 )
 
-        # Create the LM model first
-        config = self._create_model_config(llm_state_dict)
+        # Create the LM config first (needs state dict for dtype detection).
+        llm_config = self._create_model_config(llm_state_dict)
 
         n_devices = len(self.devices)
         if n_devices > 1 and self.pipeline_config.runtime.ep_size != n_devices:
@@ -619,21 +610,20 @@ class KimiK2_5Model(
         # Skip EP initialization in virtual device mode (compilation-only)
         # since NVSHMEM functions cannot be linked without real GPU devices.
         # We still keep ep_config to generate the correct graph structure.
-        if config.ep_config is not None and not is_virtual_device_mode():
-            self.ep_comm_initializer = EPCommInitializer(config.ep_config)
+        if llm_config.ep_config is not None and not is_virtual_device_mode():
+            self.ep_comm_initializer = EPCommInitializer(llm_config.ep_config)
             self.ep_comm_initializer.ep_init(session)
-            if config.ep_config.node_id == -1:
+            if llm_config.ep_config.node_id == -1:
                 raise ValueError(
                     "EP node ID is not set. Please check if the EP initialization is successful."
                 )
 
         # Generate the full KimiK2_5Config from HuggingFace config and LM config
-        kimik2_5_config = KimiK2_5Config.initialize_from_config(
+        self.model_config = KimiK2_5Config.initialize_from_config(
             pipeline_config=self.pipeline_config,
             huggingface_config=self.huggingface_config,
-            llm_config=config,
+            llm_config=llm_config,
         )
-        self.model_config = kimik2_5_config
         self.nn_model = KimiK2_5(self.model_config)
         self.nn_model.load_state_dict(
             state_dict, weight_alignment=1, strict=True
@@ -643,7 +633,7 @@ class KimiK2_5Model(
 
         # Load the vision model.
         with CompilationTimer("vision model") as timer:
-            vision_graph = self._build_vision_graph(kimik2_5_config)
+            vision_graph = self._build_vision_graph()
             timer.mark_build_complete()
             vision_model = session.load(
                 vision_graph, weights_registry=vision_state_dict
@@ -651,7 +641,7 @@ class KimiK2_5Model(
 
         # Load the language model.
         with CompilationTimer("language model") as timer:
-            language_graph = self._build_language_graph(config)
+            language_graph = self._build_language_graph()
             timer.mark_build_complete()
             language_model = session.load(
                 language_graph, weights_registry=llm_state_dict
@@ -659,23 +649,22 @@ class KimiK2_5Model(
 
         return vision_model, language_model
 
-    def _build_vision_graph(
-        self, config: KimiK2_5Config
-    ) -> Graph:
+    def _build_vision_graph(self) -> Graph:
         """Build the vision model graph for processing images."""
         assert isinstance(self.nn_model, KimiK2_5)
         vision_encoder = self.nn_model.vision_encoder
+        vision_config = self.model_config.vision_config
 
         # Define vision graph input types - one per device
         # pixel_values are raw NCHW patches fed into PatchEmbedding's Conv2d.
         pixel_values_types = [
             TensorType(
-                config.vision_config.dtype,
+                vision_config.dtype,
                 shape=[
                     "n_patches",
-                    config.vision_config.in_channels,
-                    config.vision_config.patch_size,
-                    config.vision_config.patch_size,
+                    vision_config.in_channels,
+                    vision_config.patch_size,
+                    vision_config.patch_size,
                 ],
                 device=DeviceRef.from_device(device),
             )
@@ -781,7 +770,7 @@ class KimiK2_5Model(
 
             return graph
 
-    def _build_language_graph(self, config: KimiK2_5TextConfig) -> Graph:
+    def _build_language_graph(self) -> Graph:
         """Build the language model graph for text generation with image embeddings."""
         assert isinstance(self.nn_model, KimiK2_5)
         language_model = self.nn_model.language_model
@@ -921,15 +910,6 @@ class KimiK2_5Model(
             )
 
         model_outputs = self.language_model.execute(*model_inputs.buffers)
-        return self._process_model_outputs(model_outputs)
-
-    def release(self, request_id: RequestID) -> None:
-        """Release vision encoder cache entries for a completed request."""
-        self._ve_cache.release_request(request_id)
-
-    def _process_model_outputs(
-        self, model_outputs: list[Buffer]
-    ) -> ModelOutputs:
         num_outputs = len(model_outputs)
 
         # Possible output configurations:
@@ -972,6 +952,10 @@ class KimiK2_5Model(
                 next_token_logits=model_outputs[0],
                 logits=model_outputs[0],
             )
+
+    def release(self, request_id: RequestID) -> None:
+        """Release vision encoder cache entries for a completed request."""
+        self._ve_cache.release_request(request_id)
 
     def _prepare_vision_inputs(
         self,
