@@ -53,7 +53,7 @@ from max.pipelines.architectures.llama3.model_config import (
 )
 from max.pipelines.architectures.qwen3.model_config import Qwen3Config
 
-from .embedding_utils import merge_multimodal_embeddings
+from max.pipelines.lib.vision_utils import merge_multimodal_embeddings
 from .layers.attention import InternVLMultiheadAttention
 from .model_config import InternVLConfig
 

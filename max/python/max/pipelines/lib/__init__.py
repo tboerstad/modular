@@ -89,6 +89,12 @@ from .tokenizer import (
     max_tokens_to_generate,
 )
 from .utils import CompilationTimer, upper_bounded_default
+from .vision_utils import (
+    VisionStacker,
+    assert_image_embeddings_invariant,
+    merge_multimodal_embeddings,
+)
+from .vlm_pipeline_model import VLMModelInputs, VLMPipelineModelBase
 from .weight_path_parser import WeightPathParser
 
 __all__ = [
@@ -134,7 +140,11 @@ __all__ = [
     "TextAndVisionTokenizer",
     "TextGenerationPipeline",
     "TextTokenizer",
+    "VLMModelInputs",
+    "VLMPipelineModelBase",
+    "VisionStacker",
     "WeightPathParser",
+    "assert_image_embeddings_invariant",
     "convert_max_config_value",
     "deep_merge_max_configs",
     "download_weight_files",
@@ -143,6 +153,7 @@ __all__ = [
     "get_default_max_config_file_section_name",
     "is_float4_encoding",
     "max_tokens_to_generate",
+    "merge_multimodal_embeddings",
     "parse_quant_config",
     "parse_supported_encoding_from_file_name",
     "rejection_sampler",

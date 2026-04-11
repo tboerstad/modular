@@ -11,51 +11,12 @@
 # limitations under the License.
 # ===----------------------------------------------------------------------=== #
 
-"""Utilities for merging multimodal embeddings in InternVL."""
+"""Re-exports merge_multimodal_embeddings from the shared location.
 
-from __future__ import annotations
+The canonical implementation now lives in max.pipelines.lib.vision_utils.
+This module re-exports for backwards compatibility.
+"""
 
-from max.graph import TensorValue, ops
-from max.nn.kernels import scatter_nd_skip_oob_indices
+from max.pipelines.lib.vision_utils import merge_multimodal_embeddings
 
-
-def merge_multimodal_embeddings(
-    inputs_embeds: TensorValue,
-    multimodal_embeddings: TensorValue,
-    image_token_indices: TensorValue,
-) -> TensorValue:
-    """Merges multimodal embeddings into text embeddings at pre-computed indices.
-
-    This is the MAX Graph API implementation of the embedding merge operation.
-    It returns an updated copy of inputs_embeds with multimodal embeddings
-    at positions specified by the indices.
-
-    Indices may be oob (out of bounds), in which case the corresponding update will be skipped.
-
-    Args:
-        inputs_embeds: Text embeddings with shape [num_tokens, hidden_size].
-        multimodal_embeddings: Vision embeddings to insert with shape
-            [num_multimodal_tokens, hidden_size].
-        image_token_indices: Pre-computed indices where to insert multimodal embeddings,
-            with shape [num_multimodal_tokens].
-
-    Returns:
-        Copy of the inputs_embeds tensor with multimodal embeddings merged in.
-    """
-    # Use scatter_nd_skip_oob_indices to directly place embeddings at specified indices.
-    # Expand indices to 2D for scatter_nd_skip_oob_indices: [num_tokens, 1]
-    indices_2d = ops.unsqueeze(image_token_indices, -1)
-
-    if multimodal_embeddings.dtype != inputs_embeds.dtype:
-        multimodal_embeddings = ops.cast(
-            multimodal_embeddings, dtype=inputs_embeds.dtype
-        )
-
-    # Scatter the multimodal embeddings into inputs_embeds at the specified
-    # indices. Any negative values in the indices means that the corresponding
-    # update will be skipped.
-    return scatter_nd_skip_oob_indices(
-        input=inputs_embeds,
-        updates=multimodal_embeddings,
-        indices=indices_2d,
-    )
+__all__ = ["merge_multimodal_embeddings"]

@@ -14,14 +14,11 @@
 from __future__ import annotations
 
 import logging
-import math
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import cast
 
 import numpy as np
-import numpy.typing as npt
 from max.driver import Buffer, Device, DLPackArray
 from max.dtype import DType
 from max.engine import InferenceSession, Model
@@ -45,7 +42,9 @@ from max.pipelines.lib import (
     ModelInputs,
     ModelOutputs,
     PipelineConfig,
-    PipelineModelWithKVCache,
+    VisionStacker,
+    VLMPipelineModelBase,
+    assert_image_embeddings_invariant,
 )
 from transformers.models.auto.configuration_auto import AutoConfig
 
@@ -58,102 +57,6 @@ from .weight_adapters import (
 )
 
 logger = logging.getLogger("max.pipelines")
-
-
-def _assert_image_embeddings_invariant(
-    image_embeddings: Buffer, image_token_indices: Buffer
-) -> None:
-    """Validates that image embeddings count matches image token indices count.
-
-    This prevents out-of-bounds access during scatter operations where image
-    embeddings are placed at specific token positions.
-
-    Args:
-        image_embeddings: Single tensor of image embeddings
-        image_token_indices: Single tensor of image token indices
-
-    Raises:
-        AssertionError: If embedding count doesn't match indices count
-    """
-    embed_count = image_embeddings.shape[0]
-    indices_count = image_token_indices.shape[0]
-
-    if embed_count != indices_count:
-        logger.error(
-            f"[CRITICAL] Vision embedding count ({embed_count}) "
-            f"!= image token indices count ({indices_count})."
-        )
-
-    assert embed_count == indices_count, (
-        f"Vision embedding shape mismatch: {embed_count} embeddings "
-        f"but {indices_count} indices."
-    )
-
-
-class _VisionStacker:
-    """Helper class for efficient parallel stacking of vision patches.
-
-    Uses ThreadPoolExecutor for thread management and bulk numpy operations
-    for optimal memory bandwidth utilization.
-    """
-
-    def __init__(self, max_workers: int = 24) -> None:
-        """Initialize the vision stacker with a thread pool.
-
-        Args:
-            max_workers: Maximum number of worker threads (default: 24).
-        """
-        self._pool = ThreadPoolExecutor(max_workers=max_workers)
-
-    def stack(
-        self, images: list[npt.NDArray[np.floating[Any]]]
-    ) -> npt.NDArray[np.floating[Any]]:
-        """Stack images using parallel bulk copy operations.
-
-        Args:
-            images: List of numpy arrays to stack.
-
-        Returns:
-            Stacked numpy array.
-        """
-        n = len(images)
-        if n == 0:
-            return np.empty((0,), dtype=np.float32)
-
-        # Pre-allocate output.
-        out = np.empty((n, *images[0].shape), dtype=images[0].dtype)
-
-        # Divide work evenly among threads.
-        # ThreadPoolExecutor will handle cases where n < workers.
-        workers = self._pool._max_workers
-        step = math.ceil(n / workers)
-        slices = [slice(i, min(i + step, n)) for i in range(0, n, step)]
-
-        # Launch parallel bulk copy tasks.
-        futures = [
-            self._pool.submit(self._copy_block, out, images, sl)
-            for sl in slices
-        ]
-
-        # Wait for completion and propagate any exceptions.
-        for f in as_completed(futures):
-            f.result()
-
-        return out
-
-    @staticmethod
-    def _copy_block(
-        out: npt.NDArray[np.floating[Any]],
-        images: list[npt.NDArray[np.floating[Any]]],
-        sl: slice,
-    ) -> None:
-        """Copy a block of images using bulk numpy operations.
-
-        This method performs a C-level bulk copy that releases the GIL,
-        allowing true parallel execution.
-        """
-        # Convert slice of list to temporary array view and bulk copy.
-        np.copyto(out[sl], np.asarray(images[sl], dtype=images[0].dtype))
 
 
 @dataclass
@@ -182,14 +85,8 @@ class Idefics3Inputs(ModelInputs):
         return self.pixel_values is not None
 
 
-class Idefics3Model(PipelineModelWithKVCache[TextAndVisionContext]):
+class Idefics3Model(VLMPipelineModelBase):
     """An Idefics3 pipeline model for multimodal text generation."""
-
-    vision_model: Model
-    """The compiled vision model for processing images."""
-
-    language_model: Model
-    """The compiled language model for text generation."""
 
     _input_row_offsets_prealloc: Buffer
     """Pre-allocated tensor for input row offsets in multi-step execution."""
@@ -218,7 +115,7 @@ class Idefics3Model(PipelineModelWithKVCache[TextAndVisionContext]):
 
         self.image_token_id = self.huggingface_config.image_token_id
 
-        self._stacker = _VisionStacker()
+        self._stacker = VisionStacker()
 
     @staticmethod
     def calculate_max_seq_len(
@@ -259,16 +156,9 @@ class Idefics3Model(PipelineModelWithKVCache[TextAndVisionContext]):
         Returns:
             A tuple of (vision_model, language_model).
         """
-        # Pre-allocation for multi-step execution
-        assert self.pipeline_config.runtime.max_batch_size, (
-            "Expected max_batch_size to be set"
+        self._input_row_offsets_prealloc = (
+            self._preallocate_row_offsets_single()
         )
-        self._input_row_offsets_prealloc = Buffer.from_numpy(
-            np.arange(
-                self.pipeline_config.runtime.max_batch_size + 1,
-                dtype=np.uint32,
-            )
-        ).to(self.devices[0])
 
         # Validate SafetensorWeights requirement
         if not isinstance(self.weights, SafetensorWeights):
@@ -549,8 +439,8 @@ class Idefics3Model(PipelineModelWithKVCache[TextAndVisionContext]):
             image_embeddings = vision_outputs[0]
             image_token_indices = model_inputs.image_token_indices
 
-            _assert_image_embeddings_invariant(
-                image_embeddings, image_token_indices
+            assert_image_embeddings_invariant(
+                [image_embeddings], [image_token_indices]
             )
         else:
             # Initialize empty tensors for text-only mode.
@@ -572,22 +462,7 @@ class Idefics3Model(PipelineModelWithKVCache[TextAndVisionContext]):
             *model_inputs.kv_cache_inputs,
         )
 
-        # Return model outputs based on what the language model returns
-        if len(language_outputs) == 3:
-            assert isinstance(language_outputs[0], Buffer)
-            assert isinstance(language_outputs[1], Buffer)
-            assert isinstance(language_outputs[2], Buffer)
-            return ModelOutputs(
-                next_token_logits=language_outputs[0],
-                logits=language_outputs[1],
-                logit_offsets=language_outputs[2],
-            )
-        else:
-            assert isinstance(language_outputs[0], Buffer)
-            return ModelOutputs(
-                next_token_logits=language_outputs[0],
-                logits=language_outputs[0],
-            )
+        return self._parse_language_outputs(language_outputs)
 
     def prepare_initial_token_inputs(
         self,
@@ -605,18 +480,10 @@ class Idefics3Model(PipelineModelWithKVCache[TextAndVisionContext]):
         # First marshal out the pixel values, since we'll overwrite them.
         pixel_values = self._prepare_vision_inputs(context_batch)
 
-        # Input row offset type: ["input_row_offsets_len"], UInt32
-        input_row_offsets = Buffer.from_numpy(
-            np.cumsum(
-                [0] + [ctx.tokens.active_length for ctx in context_batch],
-                dtype=np.uint32,
-            )
-        ).to(self.devices[0])
-
-        # Input Ids: ["total_seq_len"], Int64
-        # Create a ragged token vector of length: sum(len(t) for t in tokens).
-        tokens = np.concatenate([ctx.tokens.active for ctx in context_batch])
-        input_ids = Buffer.from_numpy(tokens).to(self.devices[0])
+        # Build common text input buffers.
+        input_ids, input_row_offsets, return_n_logits_buf = (
+            self._prepare_text_buffers(context_batch, return_n_logits)
+        )
 
         # Batch image token indices, offsetting for position in the batch.
         image_token_indices = self._batch_image_token_indices(context_batch)
@@ -624,9 +491,7 @@ class Idefics3Model(PipelineModelWithKVCache[TextAndVisionContext]):
         return Idefics3Inputs(
             input_ids=input_ids,
             input_row_offsets=input_row_offsets,
-            return_n_logits=Buffer.from_numpy(
-                np.array([return_n_logits], dtype=np.int64)
-            ),
+            return_n_logits=return_n_logits_buf,
             pixel_values=pixel_values,
             kv_cache_inputs=kv_cache_inputs,
             image_token_indices=image_token_indices,
