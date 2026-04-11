@@ -340,134 +340,84 @@ class LatentAttentionWithRope(Module, Shardable):
                 "LatentAttentionWithRope layer cannot be sharded because no sharding strategy was provided."
             )
 
-        if self.sharding_strategy.is_tensor_parallel:
-            # Shard weights once for all devices
-            if self.q_lora_rank is not None:
-                q_a_proj_shards = self.q_a_proj.shard(devices)
-                q_a_layernorm_weight_shards = self.q_a_layernorm.weight.shard(
-                    devices
-                )
-                q_b_proj_shards = self.q_b_proj.shard(devices)
-            else:
-                q_proj_shards = self.q_proj.shard(devices)
-
-            kv_a_proj_layernorm_shards = self.kv_a_proj_layernorm.shard(devices)
-            kv_a_proj_with_mqa_shards = self.kv_a_proj_with_mqa.shard(devices)
-            kv_b_proj_shards = self.kv_b_proj.shard(devices)
-            o_proj_shards = self.o_proj.shard(devices)
-
-            shards = []
-            for shard_idx, device in enumerate(devices):
-                sharded = LatentAttentionWithRope(
-                    rope=self.rope,
-                    num_attention_heads=self.n_heads
-                    // self.sharding_strategy.num_devices,
-                    num_key_value_heads=self.num_key_value_heads,
-                    hidden_size=self.hidden_size,
-                    kv_params=self.kv_params,
-                    dtype=self.dtype,
-                    devices=[device],
-                    graph_mode=self.graph_mode,
-                    linear_cls=self.linear_cls,
-                    o_proj_dtype=self._o_proj_dtype,
-                    o_proj_quant_config=self._o_proj_quant_config,
-                    scale=self._scale,
-                    q_lora_rank=self.q_lora_rank,
-                    kv_lora_rank=self.kv_lora_rank,
-                    qk_nope_head_dim=self.qk_nope_head_dim,
-                    qk_rope_head_dim=self.qk_rope_head_dim,
-                    v_head_dim=self.v_head_dim,
-                    buffer_size=self.BUFFER_TOK_SIZE,
-                    norm_dtype=self.norm_dtype,
-                )
-
-                # Replace the weights with sharded versions.
-                if self.q_lora_rank is not None:
-                    sharded.q_a_proj = q_a_proj_shards[shard_idx]
-                    sharded.q_a_layernorm.weight = q_a_layernorm_weight_shards[
-                        shard_idx
-                    ]
-                    sharded.q_b_proj = q_b_proj_shards[shard_idx]
-                else:
-                    sharded.q_proj = q_proj_shards[shard_idx]
-
-                sharded.kv_a_proj_layernorm = kv_a_proj_layernorm_shards[
-                    shard_idx
-                ]
-                sharded.kv_a_proj_with_mqa = kv_a_proj_with_mqa_shards[
-                    shard_idx
-                ]
-                sharded.kv_b_proj = kv_b_proj_shards[shard_idx]
-                sharded.o_proj = o_proj_shards[shard_idx]
-
-                shards.append(sharded)
-
-            return shards
-        elif self.sharding_strategy.is_replicate:
-            # Replicate full weights to each device (no head split).
-            if self.q_lora_rank is not None:
-                q_a_proj_shards = self.q_a_proj.shard(devices)
-                q_a_layernorm_weight_shards = self.q_a_layernorm.weight.shard(
-                    devices
-                )
-                q_b_proj_shards = self.q_b_proj.shard(devices)
-            else:
-                q_proj_shards = self.q_proj.shard(devices)
-
-            kv_a_proj_layernorm_shards = self.kv_a_proj_layernorm.shard(devices)
-            kv_a_proj_with_mqa_shards = self.kv_a_proj_with_mqa.shard(devices)
-            kv_b_proj_shards = self.kv_b_proj.shard(devices)
-            o_proj_shards = self.o_proj.shard(devices)
-
-            replicas: list[LatentAttentionWithRope] = []
-            for shard_idx, device in enumerate(devices):
-                replica = LatentAttentionWithRope(
-                    rope=self.rope,
-                    num_attention_heads=self.n_heads,  # DP keeps full heads
-                    num_key_value_heads=self.num_key_value_heads,
-                    hidden_size=self.hidden_size,
-                    kv_params=self.kv_params,
-                    dtype=self.dtype,
-                    devices=[device],
-                    graph_mode=self.graph_mode,
-                    linear_cls=self.linear_cls,
-                    o_proj_dtype=self._o_proj_dtype,
-                    o_proj_quant_config=self._o_proj_quant_config,
-                    scale=self._scale,
-                    q_lora_rank=self.q_lora_rank,
-                    kv_lora_rank=self.kv_lora_rank,
-                    qk_nope_head_dim=self.qk_nope_head_dim,
-                    qk_rope_head_dim=self.qk_rope_head_dim,
-                    v_head_dim=self.v_head_dim,
-                    buffer_size=self.BUFFER_TOK_SIZE,
-                    norm_dtype=self.norm_dtype,
-                )
-
-                if self.q_lora_rank is not None:
-                    replica.q_a_proj = q_a_proj_shards[shard_idx]
-                    replica.q_a_layernorm.weight = q_a_layernorm_weight_shards[
-                        shard_idx
-                    ]
-                    replica.q_b_proj = q_b_proj_shards[shard_idx]
-                else:
-                    replica.q_proj = q_proj_shards[shard_idx]
-
-                replica.kv_a_proj_layernorm = kv_a_proj_layernorm_shards[
-                    shard_idx
-                ]
-                replica.kv_a_proj_with_mqa = kv_a_proj_with_mqa_shards[
-                    shard_idx
-                ]
-                replica.kv_b_proj = kv_b_proj_shards[shard_idx]
-                replica.o_proj = o_proj_shards[shard_idx]
-
-                replicas.append(replica)
-
-            return replicas
-        else:
+        if not (
+            self.sharding_strategy.is_tensor_parallel
+            or self.sharding_strategy.is_replicate
+        ):
             raise ValueError(
                 "Only tensor parallel or replicate sharding strategies are supported for LatentAttentionWithRope"
             )
+
+        is_tp = self.sharding_strategy.is_tensor_parallel
+
+        # Shard weights once for all devices.
+        if self.q_lora_rank is not None:
+            q_a_proj_shards = self.q_a_proj.shard(devices)
+            q_a_layernorm_weight_shards = self.q_a_layernorm.weight.shard(
+                devices
+            )
+            q_b_proj_shards = self.q_b_proj.shard(devices)
+        else:
+            q_proj_shards = self.q_proj.shard(devices)
+
+        kv_a_proj_layernorm_shards = self.kv_a_proj_layernorm.shard(devices)
+        kv_a_proj_with_mqa_shards = self.kv_a_proj_with_mqa.shard(devices)
+        kv_b_proj_shards = self.kv_b_proj.shard(devices)
+        o_proj_shards = self.o_proj.shard(devices)
+
+        # TP splits heads across devices; DP replicates full heads.
+        shard_num_heads = (
+            self.n_heads // self.sharding_strategy.num_devices
+            if is_tp
+            else self.n_heads
+        )
+
+        shards = []
+        for shard_idx, device in enumerate(devices):
+            sharded = LatentAttentionWithRope(
+                rope=self.rope,
+                num_attention_heads=shard_num_heads,
+                num_key_value_heads=self.num_key_value_heads,
+                hidden_size=self.hidden_size,
+                kv_params=self.kv_params,
+                dtype=self.dtype,
+                devices=[device],
+                graph_mode=self.graph_mode,
+                linear_cls=self.linear_cls,
+                o_proj_dtype=self._o_proj_dtype,
+                o_proj_quant_config=self._o_proj_quant_config,
+                scale=self._scale,
+                q_lora_rank=self.q_lora_rank,
+                kv_lora_rank=self.kv_lora_rank,
+                qk_nope_head_dim=self.qk_nope_head_dim,
+                qk_rope_head_dim=self.qk_rope_head_dim,
+                v_head_dim=self.v_head_dim,
+                buffer_size=self.BUFFER_TOK_SIZE,
+                norm_dtype=self.norm_dtype,
+            )
+
+            # Replace the weights with sharded versions.
+            if self.q_lora_rank is not None:
+                sharded.q_a_proj = q_a_proj_shards[shard_idx]
+                sharded.q_a_layernorm.weight = q_a_layernorm_weight_shards[
+                    shard_idx
+                ]
+                sharded.q_b_proj = q_b_proj_shards[shard_idx]
+            else:
+                sharded.q_proj = q_proj_shards[shard_idx]
+
+            sharded.kv_a_proj_layernorm = kv_a_proj_layernorm_shards[
+                shard_idx
+            ]
+            sharded.kv_a_proj_with_mqa = kv_a_proj_with_mqa_shards[
+                shard_idx
+            ]
+            sharded.kv_b_proj = kv_b_proj_shards[shard_idx]
+            sharded.o_proj = o_proj_shards[shard_idx]
+
+            shards.append(sharded)
+
+        return shards
 
     @property
     def _kv_b_proj_weight(self) -> TensorValue:
@@ -612,6 +562,38 @@ class LatentAttentionWithRope(Module, Shardable):
         return self.o_proj(attn_out)
 
 
+def _run_per_device_attention(
+    attentions: list[LatentAttentionWithRope],
+    layer_idx: TensorValue,
+    xs: Sequence[TensorValue],
+    kv_collections: Sequence[PagedCacheValues],
+    freqs_cis: Sequence[TensorValue],
+    input_row_offsets: Sequence[TensorValue],
+    mla_prefill_metadata: list[MLAPrefillMetadata] | None = None,
+) -> list[TensorValue]:
+    """Runs attention on each device and returns per-device outputs."""
+    n = len(attentions)
+    outputs: list[TensorValue] = []
+    for i in range(n):
+        metadata_i = (
+            mla_prefill_metadata[i]
+            if mla_prefill_metadata is not None
+            and len(mla_prefill_metadata) == n
+            else None
+        )
+        outputs.append(
+            attentions[i](
+                layer_idx,
+                xs[i],
+                kv_collections[i],
+                freqs_cis=freqs_cis[i],
+                input_row_offsets=input_row_offsets[i],
+                mla_prefill_metadata=metadata_i,
+            )
+        )
+    return outputs
+
+
 class TensorParallelLatentAttentionWithRope(LatentAttentionWithRope):
     """Distributed tensor parallel implementation of the Latent Attention with
     Rope. Note that using tensor parallelism for MLA will cause the KV-cache to
@@ -624,6 +606,8 @@ class TensorParallelLatentAttentionWithRope(LatentAttentionWithRope):
 
     def __init__(self, *, skip_allreduce: bool = False, **kwargs) -> None:
         super().__init__(**kwargs)
+        if not self.devices:
+            raise ValueError("devices cannot be None or empty")
         num_devices = len(self.devices)
         self.skip_allreduce = skip_allreduce
         self.sharding_strategy = ShardingStrategy.tensor_parallel(num_devices)
@@ -636,7 +620,7 @@ class TensorParallelLatentAttentionWithRope(LatentAttentionWithRope):
         input_row_offsets_: list[TensorValue],
         kv_collections: list[PagedCacheValues],
     ) -> list[MLAPrefillMetadata]:
-        """Creates per-device MLA prefill metadata for tensor-parallel execution.
+        """Creates per-device MLA prefill metadata.
 
         Args:
             input_row_offsets_: Per-device ragged row offset tensors.
@@ -645,18 +629,12 @@ class TensorParallelLatentAttentionWithRope(LatentAttentionWithRope):
         Returns:
             A list of :class:`MLAPrefillMetadata` instances, one per device.
         """
-        multi_mla_prefill_metadata: list[MLAPrefillMetadata] = []
-
-        for input_row_offsets, kv_collection in zip(
-            input_row_offsets_, kv_collections, strict=True
-        ):
-            multi_mla_prefill_metadata.append(
-                super().create_mla_prefill_metadata(
-                    input_row_offsets, kv_collection
-                )
+        return [
+            super().create_mla_prefill_metadata(offsets, kv)
+            for offsets, kv in zip(
+                input_row_offsets_, kv_collections, strict=True
             )
-
-        return multi_mla_prefill_metadata
+        ]
 
     def __call__(  # type: ignore[override]
         self,
@@ -680,32 +658,21 @@ class TensorParallelLatentAttentionWithRope(LatentAttentionWithRope):
             )
 
         n = len(self.devices)
-        inputs: list[TensorValue] = []
-        for i in range(n):
-            mla_prefill_metadata_i: MLAPrefillMetadata | None
-            if (
-                mla_prefill_metadata is not None
-                and len(mla_prefill_metadata) == n
-            ):
-                mla_prefill_metadata_i = mla_prefill_metadata[i]
-            else:
-                mla_prefill_metadata_i = None
-            inputs.append(
-                self.list_of_attentions[i](
-                    layer_idx,
-                    xs[i],
-                    kv_collections[i],
-                    freqs_cis=freqs_cis[i],
-                    input_row_offsets=input_row_offsets[i],
-                    mla_prefill_metadata=mla_prefill_metadata_i,
-                )
-            )
+        outputs = _run_per_device_attention(
+            self.list_of_attentions,
+            layer_idx,
+            xs,
+            kv_collections,
+            freqs_cis,
+            input_row_offsets,
+            mla_prefill_metadata,
+        )
 
         if self.skip_allreduce:
-            return inputs
+            return outputs
 
         return self.allreduce(
-            inputs=inputs,
+            inputs=outputs,
             signal_buffers=signal_buffers,
         )
 
@@ -739,7 +706,7 @@ class DataParallelLatentAttentionWithRope(LatentAttentionWithRope):
         input_row_offsets_: list[TensorValue],
         kv_collections: list[PagedCacheValues],
     ) -> list[MLAPrefillMetadata]:
-        """Creates per-device MLA prefill metadata for data-parallel execution.
+        """Creates per-device MLA prefill metadata.
 
         Args:
             input_row_offsets_: Per-device ragged row offset tensors.
@@ -748,18 +715,12 @@ class DataParallelLatentAttentionWithRope(LatentAttentionWithRope):
         Returns:
             A list of :class:`MLAPrefillMetadata` instances, one per device.
         """
-        multi_mla_prefill_metadata: list[MLAPrefillMetadata] = []
-
-        for input_row_offsets, kv_collection in zip(
-            input_row_offsets_, kv_collections, strict=True
-        ):
-            multi_mla_prefill_metadata.append(
-                super().create_mla_prefill_metadata(
-                    input_row_offsets, kv_collection
-                )
+        return [
+            super().create_mla_prefill_metadata(offsets, kv)
+            for offsets, kv in zip(
+                input_row_offsets_, kv_collections, strict=True
             )
-
-        return multi_mla_prefill_metadata
+        ]
 
     def __call__(  # type: ignore[override]
         self,
@@ -787,28 +748,12 @@ class DataParallelLatentAttentionWithRope(LatentAttentionWithRope):
                 f"length equal to number of devices ({n})"
             )
 
-        outs: list[TensorValue] = []
-        for i in range(n):
-            mla_prefill_metadata_i: MLAPrefillMetadata | None
-            if (
-                mla_prefill_metadata is not None
-                and len(mla_prefill_metadata) == n
-            ):
-                mla_prefill_metadata_i = mla_prefill_metadata[i]
-            else:
-                assert (
-                    mla_prefill_metadata is None
-                    or len(mla_prefill_metadata) == 0
-                )
-                mla_prefill_metadata_i = None
-            outs.append(
-                self.list_of_attentions[i](
-                    layer_idx,
-                    xs[i],
-                    kv_collections[i],
-                    freqs_cis=freqs_cis[i],
-                    input_row_offsets=input_row_offsets[i],
-                    mla_prefill_metadata=mla_prefill_metadata_i,
-                )
-            )
-        return outs
+        return _run_per_device_attention(
+            self.list_of_attentions,
+            layer_idx,
+            xs,
+            kv_collections,
+            freqs_cis,
+            input_row_offsets,
+            mla_prefill_metadata,
+        )
