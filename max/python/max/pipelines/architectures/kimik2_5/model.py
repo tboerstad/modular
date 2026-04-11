@@ -638,6 +638,7 @@ class KimiK2_5Model(
         self.nn_model.load_state_dict(
             state_dict, weight_alignment=1, strict=True
         )
+        del state_dict
         logger.info("Loaded Weights")
 
         # Load the vision model.
