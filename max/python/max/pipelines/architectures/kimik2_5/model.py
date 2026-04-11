@@ -609,7 +609,7 @@ class KimiK2_5Model(
                 )
 
         # Create the LM model first
-        config = self._create_model_config(state_dict)
+        config = self._create_model_config(llm_state_dict)
 
         n_devices = len(self.devices)
         if n_devices > 1 and self.pipeline_config.runtime.ep_size != n_devices:
@@ -638,17 +638,14 @@ class KimiK2_5Model(
         self.nn_model.load_state_dict(
             state_dict, weight_alignment=1, strict=True
         )
-        self.state_dict = self.nn_model.state_dict()
         logger.info("Loaded Weights")
 
         # Load the vision model.
         with CompilationTimer("vision model") as timer:
-            vision_graph = self._build_vision_graph(
-                kimik2_5_config, vision_state_dict
-            )
+            vision_graph = self._build_vision_graph(kimik2_5_config)
             timer.mark_build_complete()
             vision_model = session.load(
-                vision_graph, weights_registry=self.state_dict
+                vision_graph, weights_registry=vision_state_dict
             )
 
         # Load the language model.
@@ -656,13 +653,13 @@ class KimiK2_5Model(
             language_graph = self._build_language_graph(config)
             timer.mark_build_complete()
             language_model = session.load(
-                language_graph, weights_registry=self.state_dict
+                language_graph, weights_registry=llm_state_dict
             )
 
         return vision_model, language_model
 
     def _build_vision_graph(
-        self, config: KimiK2_5Config, state_dict: dict[str, WeightData]
+        self, config: KimiK2_5Config
     ) -> Graph:
         """Build the vision model graph for processing images."""
         assert isinstance(self.nn_model, KimiK2_5)
