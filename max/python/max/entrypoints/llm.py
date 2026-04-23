@@ -20,9 +20,12 @@ import queue
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from threading import Event, Thread
-from typing import TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 
 import tqdm
+
+if TYPE_CHECKING:
+    from max.serve.config import Settings
 from max.interfaces import (
     RequestID,
     SamplingParams,
@@ -32,12 +35,6 @@ from max.interfaces import (
 )
 from max.pipelines.core import TextAndVisionContext, TextContext
 from max.pipelines.lib import PIPELINE_REGISTRY, PipelineConfig
-from max.serve.config import Settings
-from max.serve.pipelines.llm import TokenGeneratorPipeline
-from max.serve.pipelines.model_worker import start_model_worker
-from max.serve.pipelines.telemetry_worker import start_telemetry_consumer
-from max.serve.worker_interface.lora_queue import LoRAQueue
-from max.serve.worker_interface.zmq_interface import ZmqModelWorkerInterface
 
 T = TypeVar("T")
 U = TypeVar("U")
@@ -74,6 +71,8 @@ class LLM:
     _pending_requests: dict[RequestID, queue.Queue[_Response]]
 
     def __init__(self, pipeline_config: PipelineConfig) -> None:
+        from max.serve.config import Settings
+
         settings = Settings(offline_inference=True)
         self._pc = ThreadControl()
         self._request_queue = queue.Queue()
@@ -188,6 +187,12 @@ async def _async_worker(
     pending_requests: Mapping[RequestID, queue.Queue[_Response]],
     settings: Settings,
 ) -> None:
+    from max.serve.pipelines.llm import TokenGeneratorPipeline
+    from max.serve.pipelines.model_worker import start_model_worker
+    from max.serve.pipelines.telemetry_worker import start_telemetry_consumer
+    from max.serve.worker_interface.lora_queue import LoRAQueue
+    from max.serve.worker_interface.zmq_interface import ZmqModelWorkerInterface
+
     tokenizer, model_factory = PIPELINE_REGISTRY.retrieve_factory(
         pipeline_config
     )
