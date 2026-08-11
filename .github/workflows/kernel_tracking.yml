@@ -1,0 +1,72 @@
+##===----------------------------------------------------------------------===##
+# Copyright (c) 2026, Modular Inc. All rights reserved.
+#
+# Licensed under the Apache License v2.0 with LLVM Exceptions:
+# https://llvm.org/LICENSE.txt
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+##===----------------------------------------------------------------------===##
+
+name: Kernel Tracking
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: kernel-tracking-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  track-kernels:
+    name: ${{ matrix.model }}
+    runs-on: large-oss-linux
+    strategy:
+      fail-fast: false
+      matrix:
+        model:
+          - modularai/Llama-3.1-8B-Instruct-GGUF
+          # Add your smoke-tested models here:
+          # - modularai/Mistral-7B-Instruct-v0.3
+          # - bert-base-uncased
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install MAX nightly
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install modular \
+            --extra-index-url https://whl.modular.com/nightly/simple/
+
+      - name: Track kernels
+        run: |
+          source .venv/bin/activate
+          SLUG=$(echo "${{ matrix.model }}" | tr '/:' '-')
+          python -m max.tools.kernel_tracker \
+            --model "${{ matrix.model }}" \
+            -o "kernel-report-${SLUG}.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kernel-report-${{ strategy.job-index }}
+          path: kernel-report-*.json
+          retention-days: 90
